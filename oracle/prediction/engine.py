@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from oracle.tools import research_topic, format_context_for_prompt
+from oracle.prediction.verify import verify_predictions
 
 from oracle.llm import LLMProvider, LLMResponse
 from oracle.models.prediction import (
@@ -109,20 +110,40 @@ class PredictionEngine:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=0.4,
-            max_tokens=max(2000, 400 * max_predictions),
+            max_tokens=max(4000, 800 * max_predictions),  # More tokens for grounded responses
         )
 
         # Check for empty response (Azure deployment name mismatch)
         if not response.content.strip():
-            logger.error(
-                "LLM returned empty response — check AZURE_OPENAI_DEPLOYMENT "
-                "or model name. Current model: %s", self._llm.model_name
+            msg = (
+                f"LLM returned empty response. Model: {self._llm.model_name}. "
+                "Check AZURE_OPENAI_DEPLOYMENT env var matches your Azure Foundry deployment name."
             )
-            return []
+            logger.error(msg)
+            raise RuntimeError(msg)
 
         # Parse and validate
         predictions = self._parse_predictions(response)
         predictions = self._validate_predictions(predictions, max_predictions)
+
+        # Verify predictions against web sources
+        if predictions and web_grounding:
+            pred_dicts = [
+                {"statement": p.statement, "confidence": p.confidence,
+                 "category": p.category.value, "deadline": str(p.deadline) if p.deadline else None}
+                for p in predictions
+            ]
+            verification = await verify_predictions(self._llm, pred_dicts, web_grounding)
+            # Apply adjusted confidences
+            verified = verification.get("verified_predictions", [])
+            for i, p in enumerate(predictions):
+                if i < len(verified):
+                    adj = verified[i].get("adjusted_confidence")
+                    if adj is not None:
+                        p.confidence = max(0.1, min(0.99, adj))
+                    note = verified[i].get("verification_note", "")
+                    if note:
+                        p.reasoning = (p.reasoning or "") + f" [Verified: {note}]"
 
         logger.info("Generated %d predictions", len(predictions))
         return predictions
