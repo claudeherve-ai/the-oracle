@@ -108,9 +108,17 @@ class PredictionEngine:
         response = await self._llm.complete(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            temperature=0.4,  # Slightly creative but still grounded
+            temperature=0.4,
             max_tokens=max(2000, 400 * max_predictions),
         )
+
+        # Check for empty response (Azure deployment name mismatch)
+        if not response.content.strip():
+            logger.error(
+                "LLM returned empty response — check AZURE_OPENAI_DEPLOYMENT "
+                "or model name. Current model: %s", self._llm.model_name
+            )
+            return []
 
         # Parse and validate
         predictions = self._parse_predictions(response)

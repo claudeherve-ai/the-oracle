@@ -47,7 +47,8 @@ class OpenAIProvider:
         azure_endpoint: str | None = None,
         api_version: str = "2024-12-01-preview",
     ):
-        self._model = model
+        import os
+        self._model = os.getenv("AZURE_OPENAI_DEPLOYMENT", model)
         self._api_key = api_key
         self._azure_endpoint = azure_endpoint
         self._api_version = api_version

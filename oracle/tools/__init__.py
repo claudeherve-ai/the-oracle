@@ -76,6 +76,9 @@ async def web_search(query: str, max_results: int = 5) -> List[SearchResult]:
 
 async def web_fetch(url: str, max_chars: int = 3000) -> str:
     """Fetch and extract clean text content from a URL."""
+    # Normalize protocol-relative URLs from DuckDuckGo
+    if url.startswith("//"):
+        url = "https:" + url
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             headers = {
