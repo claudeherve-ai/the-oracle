@@ -14,6 +14,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from oracle.tools import research_topic, format_context_for_prompt
+
 from oracle.llm import LLMProvider, LLMResponse
 from oracle.models.prediction import (
     Category,
@@ -74,14 +76,26 @@ class PredictionEngine:
             logger.warning("generate() called with empty signals and no question")
             return []
 
+        # Step 0: Research the question for web grounding
+        web_grounding = ""
+        if question:
+            web_context = await research_topic(question)
+            web_grounding = format_context_for_prompt(web_context)
+            if web_context.results:
+                logger.info("Predictions grounded with %d web results for: %s",
+                           len(web_context.results), question[:80])
+
         # Build the prompt
         system_prompt = _build_system_prompt(categories)
+        combined_context = extra_context or ""
+        if web_grounding:
+            combined_context = web_grounding + ("\n\n" + combined_context if combined_context else "")
         user_prompt = _build_user_prompt(
             signals,
             question=question,
             categories=categories,
             max_predictions=max_predictions,
-            extra_context=extra_context,
+            extra_context=combined_context or None,
         )
 
         # Call LLM
