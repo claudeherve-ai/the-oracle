@@ -9,7 +9,7 @@ from oracle.llm import OpenAIProvider, LLMProvider, MockProvider
 
 @lru_cache()
 def get_llm() -> LLMProvider:
-    if os.getenv("OPENAI_API_KEY"):
+    if os.getenv("AZURE_OPENAI_API_KEY"):
         return OpenAIProvider()
     return MockProvider()
 
