@@ -1,0 +1,43 @@
+[project]
+name = "the-oracle"
+version = "0.1.0"
+description = "Predictive intelligence engine — specific, verifiable, time-bound forecasts with calibrated confidence."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.27.0",
+    "openai>=1.30.0",
+    "anthropic>=0.30.0",
+    "rich>=13.0.0",
+    "typer>=0.12.0",
+    "python-dotenv>=1.0.0",
+    "feedparser>=6.0.0",
+    "yfinance>=0.2.40",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "aiohttp>=3.9.0",
+    "sse-starlette>=2.0.0",
+    "azure-identity>=1.16.0",
+    "azure-keyvault-secrets>=4.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+]
+
+[project.scripts]
+oracle = "oracle.cli.main:app"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

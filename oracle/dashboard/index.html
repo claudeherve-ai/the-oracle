@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Oracle — Calibration Dashboard</title>
+<style>
+  :root {
+    --matrix-green: #00ff41;
+    --matrix-dark: #0a0f0a;
+    --matrix-darker: #050805;
+    --matrix-glow: #00ff4188;
+    --matrix-dim: #008f22;
+    --matrix-text: #00cc33;
+    --red: #ff3333;
+    --yellow: #ffcc00;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--matrix-darker);
+    color: var(--matrix-green);
+    font-family: 'Courier New', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  .scanline {
+    position: fixed; top: 0; left: 0; width: 100%; height: 4px;
+    background: var(--matrix-glow);
+    opacity: 0.3;
+    animation: scan 4s linear infinite;
+    pointer-events: none; z-index: 999;
+  }
+  @keyframes scan {
+    0% { top: -4px; } 100% { top: 100%; }
+  }
+  .glitch {
+    animation: glitch 0.3s infinite;
+    animation-play-state: paused;
+  }
+  .glitch:hover { animation-play-state: running; }
+  @keyframes glitch {
+    0% { transform: translate(0); }
+    20% { transform: translate(-2px, 1px); }
+    40% { transform: translate(2px, -1px); }
+    60% { transform: translate(-1px, 0); }
+    80% { transform: translate(1px, 1px); }
+    100% { transform: translate(0); }
+  }
+  header {
+    padding: 2rem; text-align: center; border-bottom: 1px solid var(--matrix-dim);
+  }
+  header h1 { font-size: 2.5rem; letter-spacing: 0.3em; text-shadow: 0 0 20px var(--matrix-glow); }
+  header p { color: var(--matrix-dim); margin-top: 0.5rem; }
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem; padding: 2rem; max-width: 1400px; margin: 0 auto;
+  }
+  .card {
+    background: var(--matrix-dark); border: 1px solid var(--matrix-dim);
+    padding: 1.5rem; border-radius: 4px;
+  }
+  .card h2 {
+    font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.2em;
+    color: var(--matrix-dim); margin-bottom: 1rem;
+  }
+  .big-number {
+    font-size: 3rem; font-weight: bold; text-shadow: 0 0 15px var(--matrix-glow);
+  }
+  .stat-row { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--matrix-dark); }
+  .bar-container { height: 8px; background: var(--matrix-darker); margin-top: 4px; border-radius: 2px; }
+  .bar-fill { height: 100%; border-radius: 2px; transition: width 1s ease; }
+  .bar-green { background: var(--matrix-green); }
+  .bar-yellow { background: var(--yellow); }
+  .bar-red { background: var(--red); }
+  canvas { width: 100%; max-height: 300px; }
+  .feed { max-height: 400px; overflow-y: auto; }
+  .feed-item {
+    padding: 0.75rem; border-bottom: 1px solid var(--matrix-dark);
+    font-size: 0.85rem;
+  }
+  .feed-item .statement { margin-bottom: 0.25rem; }
+  .feed-item .meta { color: var(--matrix-dim); font-size: 0.75rem; }
+  .pending { border-left: 2px solid var(--yellow); }
+  .correct { border-left: 2px solid var(--matrix-green); }
+  .incorrect { border-left: 2px solid var(--red); }
+  footer {
+    text-align: center; padding: 2rem; color: var(--matrix-dim); font-size: 0.75rem;
+    border-top: 1px solid var(--matrix-dim);
+  }
+  .loading { text-align: center; padding: 2rem; animation: pulse 1s infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; } 50% { opacity: 0.5; }
+  }
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+
+<header>
+  <h1 class="glitch">T H E   O R A C L E</h1>
+  <p>PREDICTIVE INTELLIGENCE ENGINE // CALIBRATION DASHBOARD</p>
+</header>
+
+<div class="grid">
+  <div class="card" id="accuracy-card">
+    <h2>▸ Overall Accuracy</h2>
+    <div class="big-number" id="accuracy">--</div>
+    <div id="accuracy-detail" style="color:var(--matrix-dim)"></div>
+  </div>
+
+  <div class="card">
+    <h2>▸ Calibration Curve</h2>
+    <canvas id="calibration-chart"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>▸ By Confidence Bucket</h2>
+    <div id="buckets"><div class="loading">LOADING...</div></div>
+  </div>
+
+  <div class="card">
+    <h2>▸ By Category</h2>
+    <div id="categories"><div class="loading">LOADING...</div></div>
+  </div>
+
+  <div class="card" style="grid-column: span 2;">
+    <h2>▸ Recent Predictions</h2>
+    <div class="feed" id="feed"><div class="loading">LOADING...</div></div>
+  </div>
+</div>
+
+<footer>
+  THE ORACLE v0.1.0 // AZURE CONTAINER APPS (EASTUS2) // ALL PREDICTIONS VERIFIABLE
+</footer>
+
+<script>
+async function load() {
+  try {
+    const r = await fetch('/v1/dashboard');
+    const d = await r.json();
+    const cal = d.calibration;
+    const preds = d.recent_predictions;
+
+    // Accuracy
+    const acc = cal.overall_accuracy || 0;
+    const color = acc >= 0.7 ? '#00ff41' : acc >= 0.5 ? '#ffcc00' : '#ff3333';
+    document.getElementById('accuracy').style.color = color;
+    document.getElementById('accuracy').textContent = (acc * 100).toFixed(1) + '%';
+    document.getElementById('accuracy-detail').textContent =
+      cal.overall_correct + ' / ' + cal.overall_total + ' predictions correct';
+
+    // Buckets
+    const bucketsDiv = document.getElementById('buckets');
+    bucketsDiv.innerHTML = '';
+    (cal.buckets || []).forEach(b => {
+      const a = b.accuracy || 0;
+      const c = a >= 0.7 ? '#00ff41' : a >= 0.5 ? '#ffcc00' : '#ff3333';
+      bucketsDiv.innerHTML += `
+        <div style="margin-bottom:0.75rem">
+          <div class="stat-row">
+            <span>${b.confidence_range}</span>
+            <span style="color:${c}">${b.correct}/${b.total} (${(a*100).toFixed(0)}%)</span>
+          </div>
+          <div class="bar-container"><div class="bar-fill" style="width:${a*100}%;background:${c}"></div></div>
+        </div>`;
+    });
+
+    // Categories
+    const catDiv = document.getElementById('categories');
+    catDiv.innerHTML = '';
+    const byCat = cal.by_category || {};
+    Object.entries(byCat).forEach(([cat, data]) => {
+      const a = data.accuracy || 0;
+      const c = a >= 0.7 ? '#00ff41' : a >= 0.5 ? '#ffcc00' : '#ff3333';
+      catDiv.innerHTML += `
+        <div style="margin-bottom:0.75rem">
+          <div class="stat-row">
+            <span>${cat}</span>
+            <span style="color:${c}">${data.correct}/${data.total} (${(a*100).toFixed(0)}%)</span>
+          </div>
+          <div class="bar-container"><div class="bar-fill" style="width:${a*100}%;background:${c}"></div></div>
+        </div>`;
+    });
+
+    // Feed
+    const feedDiv = document.getElementById('feed');
+    feedDiv.innerHTML = '';
+    preds.forEach(p => {
+      const conf = (p.confidence * 100).toFixed(0);
+      feedDiv.innerHTML += `
+        <div class="feed-item ${p.status}">
+          <div class="statement">${p.statement}</div>
+          <div class="meta">
+            [${p.category}] ${conf}% confidence
+            ${p.deadline ? ' · deadline: ' + p.deadline.slice(0,10) : ''}
+            ${p.resolution ? ' · resolved: ' + p.resolution : ''}
+          </div>
+        </div>`;
+    });
+
+    // Calibration chart
+    drawChart(cal.buckets || []);
+  } catch(e) {
+    document.body.innerHTML += '<div style="color:#ff3333;text-align:center;padding:2rem">CONNECTION ERROR: Is the Oracle running? (port 8001)</div>';
+  }
+}
+
+function drawChart(buckets) {
+  const canvas = document.getElementById('calibration-chart');
+  if (!canvas || !buckets.length) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width = canvas.parentElement.clientWidth - 48;
+  const H = canvas.height = 280;
+  const pad = 40;
+
+  // Background
+  ctx.fillStyle = '#0a0f0a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#0d1a0d';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 10; i++) {
+    const y = pad + (H - pad * 2) * (1 - i / 10);
+    ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W - pad, y); ctx.stroke();
+  }
+
+  // Diagonal (perfect calibration)
+  ctx.strokeStyle = '#00ff4122';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([5, 5]);
+  ctx.beginPath();
+  ctx.moveTo(pad, H - pad);
+  ctx.lineTo(W - pad, pad);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Data points
+  buckets.forEach(b => {
+    if (!b.total) return;
+    const range = b.confidence_range;
+    const parts = range.split('-');
+    const midX = (parseFloat(parts[0]) + parseFloat(parts[1])) / 2;
+    const x = pad + midX * (W - pad * 2);
+    const y = H - pad - (b.accuracy || 0) * (H - pad * 2);
+    const r = Math.min(12, Math.max(4, Math.sqrt(b.total) * 2));
+
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = (b.accuracy || 0) >= 0.7 ? '#00ff41' : '#ffcc00';
+    ctx.fill();
+    ctx.strokeStyle = '#0a0f0a';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  });
+
+  // Labels
+  ctx.fillStyle = '#008f22';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('CONFIDENCE', W/2, H-5);
+  ctx.save();
+  ctx.translate(10, H/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillText('ACCURACY', 0, 0);
+  ctx.restore();
+
+  ctx.fillText('0%', pad, H-pad+15);
+  ctx.fillText('50%', W/2, H-pad+15);
+  ctx.fillText('100%', W-pad, H-pad+15);
+}
+
+load();
+setInterval(load, 30000); // refresh every 30s
+</script>
+</body>
+</html>
