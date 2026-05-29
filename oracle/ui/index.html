@@ -5,94 +5,265 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>The Oracle — Predictive Intelligence</title>
 <style>
-  :root { --green: #00ff41; --dark: #0a0f0a; --darker: #050805; --dim: #008f22; --glow: #00ff4188; --red: #ff3333; --yellow: #ffcc00; }
+  :root {
+    --green: #00ff41; --dark: #0a0f0a; --darker: #050805;
+    --dim: #008f22; --glow: #00ff4188; --red: #ff3333;
+    --yellow: #ffcc00; --blue: #00aaff; --purple: #bb44ff;
+    --surface: #0d140d; --surface-hover: #111a11;
+    --border: #0f2a0f; --text-dim: #006618;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: var(--darker); color: var(--green); font-family: 'Courier New', monospace; min-height: 100vh; display: flex; flex-direction: column; }
-  .scanline { position: fixed; top: 0; left: 0; width: 100%; height: 3px; background: var(--glow); opacity: 0.3; animation: scan 4s linear infinite; pointer-events: none; z-index: 999; }
+  body {
+    background: var(--darker); color: var(--green);
+    font-family: 'Courier New', 'Consolas', monospace;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  .scanline {
+    position: fixed; top: 0; left: 0; width: 100%; height: 3px;
+    background: linear-gradient(90deg, transparent, var(--glow), transparent);
+    opacity: 0.15; animation: scan 3s linear infinite;
+    pointer-events: none; z-index: 999;
+  }
   @keyframes scan { 0% { top: -4px; } 100% { top: 100%; } }
-  header { padding: 1.5rem; text-align: center; border-bottom: 1px solid var(--dim); }
-  header h1 { font-size: 1.8rem; letter-spacing: 0.3em; text-shadow: 0 0 15px var(--glow); }
-  header p { color: var(--dim); font-size: 0.8rem; margin-top: 0.25rem; }
-  nav { display: flex; justify-content: center; gap: 1rem; padding: 0.75rem; border-bottom: 1px solid var(--dark); }
-  nav a { color: var(--dim); text-decoration: none; font-size: 0.8rem; padding: 0.25rem 0.75rem; border: 1px solid transparent; border-radius: 4px; }
-  nav a:hover, nav a.active { color: var(--green); border-color: var(--dim); }
+
+  /* ── Navigation ── */
+  nav {
+    display: flex; align-items: center; gap: 1.5rem;
+    padding: 0.75rem 2rem; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .brand { font-size: 1rem; letter-spacing: 0.2em; color: var(--green); text-decoration: none; text-shadow: 0 0 8px var(--glow); }
+  nav .brand:hover { text-shadow: 0 0 15px var(--green); }
+  nav .spacer { flex: 1; }
+  nav a {
+    color: var(--dim); text-decoration: none; font-size: 0.8rem;
+    padding: 0.35rem 0.75rem; border: 1px solid transparent;
+    border-radius: 4px; transition: all 0.2s;
+  }
+  nav a:hover { color: var(--green); border-color: var(--dim); background: var(--surface-hover); }
+  nav a.active { color: var(--green); border-color: var(--green); box-shadow: 0 0 8px var(--glow); }
+  nav .nav-badge {
+    background: rgba(0,255,65,0.1); color: var(--green);
+    padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.6rem;
+    margin-left: -0.5rem;
+  }
+
+  /* ── Header ── */
+  header {
+    padding: 1.5rem 2rem; text-align: center;
+    background: linear-gradient(180deg, var(--surface), transparent);
+  }
+  header h1 { font-size: 2rem; letter-spacing: 0.3em; text-shadow: 0 0 20px var(--glow), 0 0 40px var(--glow); }
+  header .subtitle { color: var(--text-dim); font-size: 0.7rem; letter-spacing: 0.15em; margin-top: 0.25rem; }
+
+  /* ── Main ── */
   main { flex: 1; max-width: 900px; margin: 0 auto; width: 100%; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
-  .input-area { display: flex; gap: 0.5rem; }
+
+  /* ── Input area ── */
+  .input-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.25rem;
+  }
+  .input-area { display: flex; gap: 0.75rem; }
   .input-area textarea {
-    flex: 1; background: var(--dark); border: 1px solid var(--dim); color: var(--green);
-    padding: 0.75rem; font-family: inherit; font-size: 0.9rem; resize: vertical;
-    min-height: 60px; border-radius: 4px;
+    flex: 1; background: var(--darker); border: 1px solid var(--border);
+    color: var(--green); padding: 0.75rem; font-family: inherit;
+    font-size: 0.9rem; resize: vertical; min-height: 70px;
+    border-radius: 6px; transition: all 0.3s;
   }
-  .input-area textarea:focus { outline: none; border-color: var(--green); box-shadow: 0 0 10px var(--glow); }
+  .input-area textarea:focus {
+    outline: none; border-color: var(--green);
+    box-shadow: 0 0 15px var(--glow);
+  }
+  .input-area textarea::placeholder { color: var(--text-dim); }
+  .input-area .btn-group { display: flex; flex-direction: column; gap: 0.4rem; }
   .input-area button {
-    background: var(--dim); border: none; color: var(--darker); padding: 0 1.5rem;
-    font-family: inherit; font-weight: bold; cursor: pointer; border-radius: 4px;
-    font-size: 0.9rem; letter-spacing: 0.1em; transition: all 0.2s;
+    background: var(--dim); border: none; color: var(--darker);
+    padding: 0.5rem 1.25rem; font-family: inherit; font-weight: bold;
+    cursor: pointer; border-radius: 6px; font-size: 0.8rem;
+    letter-spacing: 0.1em; transition: all 0.2s; white-space: nowrap;
   }
-  .input-area button:hover { background: var(--green); box-shadow: 0 0 15px var(--glow); }
-  .input-area button:disabled { opacity: 0.3; }
-  .spinner { display: none; text-align: center; padding: 1rem; animation: pulse 1s infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
-  .error { color: var(--red); padding: 0.5rem; display: none; }
+  .input-area button:hover { background: var(--green); box-shadow: 0 0 15px var(--glow); transform: translateY(-1px); }
+  .input-area button:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
+  .input-area button.primary { background: var(--green); color: var(--darker); font-size: 0.85rem; }
+
+  /* ── Example prompts ── */
+  .examples {
+    margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;
+  }
+  .example-chip {
+    padding: 0.2rem 0.6rem; font-size: 0.7rem; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 12px; cursor: pointer;
+    transition: all 0.2s; white-space: nowrap;
+  }
+  .example-chip:hover { color: var(--green); border-color: var(--dim); background: var(--surface-hover); }
+
+  /* ── Grounding indicator ── */
+  .grounding-bar {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.4rem 0.75rem; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px;
+    font-size: 0.7rem; color: var(--text-dim);
+  }
+  .grounding-bar.active { color: var(--green); border-color: var(--dim); }
+  .grounding-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
+  .grounding-dot.active { background: var(--green); box-shadow: 0 0 6px var(--glow); animation: pulse 1.5s infinite; }
+
+  /* ── Results ── */
+  .spinner { display: none; text-align: center; padding: 1.5rem; animation: pulse 1s infinite; color: var(--dim); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .error { color: var(--red); padding: 1rem; display: none; background: rgba(255,51,51,0.05); border: 1px solid rgba(255,51,51,0.2); border-radius: 6px; }
+
   .prediction-card {
-    background: var(--dark); border: 1px solid var(--dim); padding: 1.25rem; border-radius: 4px; margin-bottom: 0.75rem;
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 1.25rem; border-radius: 8px; margin-bottom: 0.75rem;
+    transition: all 0.3s; position: relative; overflow: hidden;
   }
-  .prediction-card .statement { font-size: 1rem; margin-bottom: 0.5rem; }
-  .prediction-card .meta { color: var(--dim); font-size: 0.75rem; display: flex; gap: 1rem; flex-wrap: wrap; }
-  .bar-container { height: 6px; background: var(--darker); margin: 0.5rem 0; border-radius: 2px; }
-  .bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s; }
-  .reasoning { color: var(--dim); font-size: 0.8rem; margin-top: 0.5rem; }
-  .history { margin-top: 1rem; }
+  .prediction-card:hover {
+    border-color: var(--dim);
+    box-shadow: 0 0 20px rgba(0,255,65,0.03);
+  }
+  .prediction-card::before {
+    content: ''; position: absolute; left: 0; top: 0; width: 3px; height: 100%;
+    transition: all 0.3s;
+  }
+  .prediction-card.conf-high::before { background: var(--green); box-shadow: 0 0 8px var(--glow); }
+  .prediction-card.conf-med::before { background: var(--yellow); }
+  .prediction-card.conf-low::before { background: var(--red); }
+  .prediction-card .statement { font-size: 0.95rem; margin-bottom: 0.5rem; padding-left: 0.75rem; }
+  .prediction-card .bar-container { height: 5px; background: var(--darker); margin: 0.5rem 0; border-radius: 3px; overflow: hidden; }
+  .prediction-card .bar-fill { height: 100%; border-radius: 3px; transition: width 0.8s ease; }
+  .prediction-card .meta {
+    color: var(--text-dim); font-size: 0.7rem;
+    display: flex; gap: 1rem; flex-wrap: wrap; padding-left: 0.75rem;
+  }
+  .prediction-card .confidence-badge {
+    padding: 0.15rem 0.5rem; border-radius: 3px; font-weight: bold; font-size: 0.75rem;
+  }
+  .prediction-card .reasoning {
+    color: var(--dim); font-size: 0.75rem; margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem; background: var(--darker);
+    border-radius: 4px; border-left: 2px solid var(--border);
+  }
+  .prediction-card .sources {
+    color: var(--text-dim); font-size: 0.65rem; margin-top: 0.5rem;
+    padding-left: 0.75rem;
+  }
+  .prediction-card .sources a { color: var(--dim); }
+
+  /* ── History ── */
+  .history { margin-top: 0.5rem; }
   .history-item {
-    padding: 0.5rem; border-bottom: 1px solid var(--dark); font-size: 0.8rem;
-    display: flex; justify-content: space-between;
+    padding: 0.6rem 0.75rem; border-bottom: 1px solid rgba(0,255,65,0.04);
+    font-size: 0.8rem; display: flex; justify-content: space-between;
+    transition: background 0.2s;
   }
-  .history-item.resolved-correct { border-left: 2px solid var(--green); }
-  .history-item.resolved-incorrect { border-left: 2px solid var(--red); }
-  .tabs { display: none; }
+  .history-item:hover { background: var(--surface-hover); }
+
+  /* ── Calibration mini ── */
+  .cal-mini { text-align: center; padding: 1rem; }
+
+  /* ── Tabs ── */
   .tab-content { display: none; }
   .tab-content.active { display: block; }
-  footer { text-align: center; padding: 1rem; color: var(--dim); font-size: 0.7rem; border-top: 1px solid var(--dim); }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center; padding: 1rem; color: var(--text-dim);
+    font-size: 0.7rem; border-top: 1px solid var(--border);
+  }
+
+  /* Scroll */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 </style>
 </head>
 <body>
 <div class="scanline"></div>
-<header>
-  <h1>T H E &nbsp; O R A C L E</h1>
-  <p>PREDICTIVE INTELLIGENCE ENGINE // AZURE FOUNDRY (GPT-5.4)</p>
-</header>
+
 <nav>
+  <a href="/" class="brand">◈ THE ORACLE</a>
+  <span class="spacer"></span>
   <a href="#" class="active" onclick="switchTab('predict')">▸ PREDICT</a>
   <a href="#" onclick="switchTab('history')">▸ HISTORY</a>
   <a href="#" onclick="switchTab('calibration')">▸ CALIBRATION</a>
-  <a href="/dashboard/index.html">▸ DASHBOARD</a>
+  <a href="/dashboard/index.html">▸ DASHBOARD <span class="nav-badge">NEW</span></a>
 </nav>
-<main>
-  <div class="tab-content active" id="tab-predict">
-    <div class="input-area">
-      <textarea id="question" placeholder="Ask The Oracle...
 
-Example: Will Apple announce new hardware at WWDC 2026?
-Example: Will NVDA stock reach $200 by July?
-Example: Which AI framework will dominate enterprise by 2027?"></textarea>
-      <button id="askBtn" onclick="ask()">▸ CONSULT</button>
+<header>
+  <h1>T H E &nbsp; O R A C L E</h1>
+  <div class="subtitle">PREDICTIVE INTELLIGENCE ENGINE // MULTI-SOURCE MCP GROUNDING // AZURE FOUNDRY (GPT-5.4)</div>
+</header>
+
+<main>
+  <!-- Predict Tab -->
+  <div class="tab-content active" id="tab-predict">
+    <div class="input-card">
+      <div class="input-area">
+        <textarea id="question" placeholder="Ask The Oracle anything about the future...
+
+Examples:
+  "Will Apple announce new hardware at WWDC 2026?"
+  "Will NVDA stock reach $200 by July 2026?"
+  "Which AI framework will dominate enterprise by 2027?"
+  "Will the Fed cut rates in Q3 2026?""></textarea>
+        <div class="btn-group">
+          <button id="askBtn" class="primary" onclick="ask()">▸ CONSULT</button>
+          <button onclick="document.getElementById('question').value=''" style="font-size:0.7rem">CLEAR</button>
+        </div>
+      </div>
+      <div class="examples">
+        <span class="example-chip" onclick="setPrompt('Will Apple release a foldable iPhone by end of 2026?')">📱 Foldable iPhone</span>
+        <span class="example-chip" onclick="setPrompt('Will NVDA stock close above $200 on July 15, 2026?')">📈 NVDA $200</span>
+        <span class="example-chip" onclick="setPrompt('Will the Fed cut interest rates in Q3 2026?')">🏦 Fed Rate Cut</span>
+        <span class="example-chip" onclick="setPrompt('Which AI framework will dominate enterprise by 2027?')">🤖 AI Framework</span>
+        <span class="example-chip" onclick="setPrompt('Will Microsoft acquire a major AI startup in 2026?')">💼 MSFT M&A</span>
+      </div>
     </div>
+
+    <div class="grounding-bar" id="groundingBar">
+      <span class="grounding-dot" id="groundingDot"></span>
+      <span id="groundingLabel">MCP + Web grounding ready (Microsoft Docs, Context7, DeepWiki, GitHub)</span>
+    </div>
+
     <div class="error" id="error"></div>
-    <div class="spinner" id="spinner">CONSULTING THE ORACLE...</div>
+    <div class="spinner" id="spinner">◈ CONSULTING THE ORACLE — grounding with MCP servers & web research...</div>
     <div id="predictions"></div>
   </div>
+
+  <!-- History Tab -->
   <div class="tab-content" id="tab-history">
-    <div class="spinner" id="histSpinner">LOADING...</div>
+    <div class="grounding-bar">
+      <span class="grounding-dot"></span>
+      <span>Resolution history for tracking calibration</span>
+    </div>
+    <div class="spinner" id="histSpinner" style="display:block">LOADING HISTORY...</div>
     <div class="history" id="historyList"></div>
   </div>
+
+  <!-- Calibration Tab -->
   <div class="tab-content" id="tab-calibration">
-    <div class="spinner" id="calSpinner">LOADING...</div>
+    <div class="grounding-bar">
+      <span class="grounding-dot"></span>
+      <span>Calibration = confidence matches accuracy. Well-calibrated Oracles are trustworthy.</span>
+    </div>
+    <div class="spinner" id="calSpinner" style="display:block">LOADING CALIBRATION...</div>
     <div id="calibrationData"></div>
   </div>
 </main>
-<footer>THE ORACLE v0.1.0 // AZURE CONTAINER APPS (EASTUS2)</footer>
+
+<footer>
+  THE ORACLE v0.2.0 // AZURE CONTAINER APPS (EASTUS2) // MCP-GROUNDED // ANTI-HALLUCINATION
+  <br><span style="color:var(--text-dim)">Microsoft Docs · Context7 · DeepWiki · HuggingFace · DuckDuckGo · All predictions verifiable</span>
+</footer>
+
 <script>
 const API = '/v1';
+
+function setPrompt(text) {
+  document.getElementById('question').value = text;
+  document.getElementById('question').focus();
+}
 
 async function ask() {
   const q = document.getElementById('question').value.trim();
@@ -103,6 +274,13 @@ async function ask() {
   document.getElementById('error').style.display = 'none';
   document.getElementById('spinner').style.display = 'block';
   document.getElementById('predictions').innerHTML = '';
+
+  // Show active grounding
+  const gBar = document.getElementById('groundingBar');
+  const gDot = document.getElementById('groundingDot');
+  const gLabel = document.getElementById('groundingLabel');
+  gBar.classList.add('active'); gDot.classList.add('active');
+  gLabel.textContent = 'Grounding with MCP servers + web...';
 
   try {
     const r = await fetch(API + '/predict/query', {
@@ -115,36 +293,47 @@ async function ask() {
     const preds = data.predictions || [];
 
     let html = '';
-    preds.forEach((p,i) => {
+    preds.forEach((p, i) => {
       const conf = p.confidence * 100;
-      const c = conf >= 70 ? 'var(--green)' : conf >= 50 ? 'var(--yellow)' : 'var(--red)';
-      html += `<div class="prediction-card">
-        <div class="statement"><strong>${i+1}.</strong> ${p.statement}</div>
-        <div class="bar-container"><div class="bar-fill" style="width:${conf}%;background:${c}"></div></div>
+      const confClass = conf >= 70 ? 'conf-high' : conf >= 50 ? 'conf-med' : 'conf-low';
+      const confColor = conf >= 70 ? 'var(--green)' : conf >= 50 ? 'var(--yellow)' : 'var(--red)';
+      const confBg = conf >= 70 ? 'rgba(0,255,65,0.1)' : conf >= 50 ? 'rgba(255,204,0,0.1)' : 'rgba(255,51,51,0.1)';
+      const sources = (p.sources || []).slice(0, 3);
+
+      html += `<div class="prediction-card ${confClass}">
+        <div class="statement"><strong>#${i+1}</strong> ${p.statement}</div>
+        <div class="bar-container"><div class="bar-fill" style="width:${conf}%;background:${confColor}"></div></div>
         <div class="meta">
-          <span style="color:${c}">CONFIDENCE: ${conf.toFixed(0)}%</span>
+          <span class="confidence-badge" style="background:${confBg};color:${confColor}">${conf.toFixed(0)}% CONFIDENCE</span>
           <span>[${p.category}]</span>
-          ${p.deadline ? '<span>DEADLINE: '+p.deadline.slice(0,10)+'</span>' : ''}
+          ${p.deadline ? '<span>⏱ DEADLINE: '+p.deadline.slice(0,10)+'</span>' : ''}
           <span>ID: ${p.id.slice(0,8)}</span>
         </div>
-        ${p.reasoning ? `<div class="reasoning">${p.reasoning.slice(0,250)}</div>` : ''}
+        ${p.reasoning ? `<div class="reasoning">💡 ${p.reasoning.slice(0,400)}</div>` : ''}
+        ${sources.length ? `<div class="sources">📚 Sources: ${sources.map(s => `<a href="${s}" target="_blank">${s.slice(0,50)}</a>`).join(' · ')}</div>` : ''}
       </div>`;
     });
-    document.getElementById('predictions').innerHTML = html || '<div style="color:var(--dim);padding:1rem">No predictions generated. Try a different question.</div>';
+
+    document.getElementById('predictions').innerHTML = html || '<div style="color:var(--text-dim);padding:2rem;text-align:center">No predictions generated. Try a more specific question.</div>';
     document.getElementById('question').value = '';
+
+    gLabel.textContent = `Grounded with ${data.grounded_sources || 'MCP + web'} sources`;
   } catch(e) {
     document.getElementById('error').textContent = '✗ ' + e.message;
     document.getElementById('error').style.display = 'block';
   }
   document.getElementById('spinner').style.display = 'none';
   btn.disabled = false; btn.textContent = '▸ CONSULT';
+  setTimeout(() => { gBar.classList.remove('active'); gDot.classList.remove('active'); }, 5000);
 }
 
 async function switchTab(tab) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
-  event.target.classList.add('active');
+  // Highlight active nav link
+  const navLinks = document.querySelectorAll('nav a');
+  navLinks.forEach(a => { if (a.textContent.toLowerCase().includes(tab)) a.classList.add('active'); });
 
   if (tab === 'history') loadHistory();
   if (tab === 'calibration') loadCalibration();
@@ -157,12 +346,13 @@ async function loadHistory() {
     const data = await r.json();
     let html = '';
     (data.items||[]).forEach(p => {
+      const badgeClass = p.status === 'correct' ? 'badge-correct' : p.status === 'incorrect' ? 'badge-incorrect' : 'badge-pending';
       html += `<div class="history-item resolved-${p.status}">
-        <span>${p.statement.slice(0,100)}</span>
-        <span style="color:var(--dim)">[${p.category}] ${(p.confidence*100).toFixed(0)}% — ${p.status}</span>
+        <span>${p.statement.slice(0,120)}</span>
+        <span style="color:var(--text-dim);font-size:0.7rem">[${p.category}] ${(p.confidence*100).toFixed(0)}% — ${p.status}</span>
       </div>`;
     });
-    document.getElementById('historyList').innerHTML = html || '<div style="color:var(--dim);padding:1rem">No predictions yet.</div>';
+    document.getElementById('historyList').innerHTML = html || '<div style="color:var(--text-dim);padding:2rem;text-align:center">No predictions yet. <a href="#" onclick="switchTab(\'predict\')" style="color:var(--green)">Make one →</a></div>';
   } catch(e) {}
   document.getElementById('histSpinner').style.display = 'none';
 }
@@ -174,12 +364,14 @@ async function loadCalibration() {
     const d = await r.json();
     const acc = (d.overall_accuracy||0)*100;
     const c = acc>=70?'var(--green)':acc>=50?'var(--yellow)':'var(--red)';
-    let html = `<div style="font-size:2rem;text-align:center;padding:1rem;color:${c}">${acc.toFixed(1)}%</div>`;
-    html += `<div style="text-align:center;color:var(--dim);margin-bottom:1rem">${d.overall_correct||0}/${d.overall_total||0} predictions correct</div>`;
+    let html = `<div class="cal-mini">
+      <div style="font-size:3rem;color:${c};text-shadow:0 0 20px ${c}">${acc.toFixed(1)}%</div>
+      <div style="color:var(--text-dim)">${d.overall_correct||0}/${d.overall_total||0} predictions correct</div>
+    </div>`;
     (d.buckets||[]).forEach(b => {
       const a = (b.accuracy||0)*100;
       html += `<div style="margin-bottom:0.5rem">
-        <div style="display:flex;justify-content:space-between"><span>${b.confidence_range}</span><span>${b.correct}/${b.total} (${a.toFixed(0)}%)</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:0.8rem"><span>${b.confidence_range}</span><span style="color:${a>=70?'var(--green)':'var(--yellow)'}">${b.correct}/${b.total} (${a.toFixed(0)}%)</span></div>
         <div class="bar-container"><div class="bar-fill" style="width:${a}%;background:${a>=70?'var(--green)':'var(--yellow)'}"></div></div>
       </div>`;
     });
@@ -188,7 +380,10 @@ async function loadCalibration() {
   document.getElementById('calSpinner').style.display = 'none';
 }
 
-// Load history on page load for the history tab (deferred)
+// Enter key to submit
+document.getElementById('question').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
+});
 </script>
 </body>
 </html>

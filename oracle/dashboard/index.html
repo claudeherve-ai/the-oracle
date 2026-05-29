@@ -6,272 +6,520 @@
 <title>The Oracle — Calibration Dashboard</title>
 <style>
   :root {
-    --matrix-green: #00ff41;
-    --matrix-dark: #0a0f0a;
-    --matrix-darker: #050805;
-    --matrix-glow: #00ff4188;
-    --matrix-dim: #008f22;
-    --matrix-text: #00cc33;
-    --red: #ff3333;
-    --yellow: #ffcc00;
+    --green: #00ff41; --dark: #0a0f0a; --darker: #050805;
+    --dim: #008f22; --glow: #00ff4188; --red: #ff3333;
+    --yellow: #ffcc00; --blue: #00aaff; --purple: #bb44ff;
+    --surface: #0d140d; --surface-hover: #111a11;
+    --border: #0f2a0f; --text-dim: #006618;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    background: var(--matrix-darker);
-    color: var(--matrix-green);
-    font-family: 'Courier New', monospace;
+    background: var(--darker);
+    color: var(--green);
+    font-family: 'Courier New', 'Consolas', monospace;
     min-height: 100vh;
     overflow-x: hidden;
   }
+  /* Scanline effect */
   .scanline {
-    position: fixed; top: 0; left: 0; width: 100%; height: 4px;
-    background: var(--matrix-glow);
-    opacity: 0.3;
-    animation: scan 4s linear infinite;
+    position: fixed; top: 0; left: 0; width: 100%; height: 3px;
+    background: linear-gradient(90deg, transparent, var(--glow), transparent);
+    opacity: 0.15; animation: scan 3s linear infinite;
     pointer-events: none; z-index: 999;
   }
-  @keyframes scan {
-    0% { top: -4px; } 100% { top: 100%; }
+  @keyframes scan { 0% { top: -4px; } 100% { top: 100%; } }
+
+  /* ── Navigation ── */
+  nav {
+    display: flex; align-items: center; gap: 1.5rem;
+    padding: 0.75rem 2rem; background: var(--surface);
+    border-bottom: 1px solid var(--border);
   }
-  .glitch {
-    animation: glitch 0.3s infinite;
-    animation-play-state: paused;
+  nav .brand { font-size: 1rem; letter-spacing: 0.2em; color: var(--green); text-decoration: none; text-shadow: 0 0 8px var(--glow); }
+  nav .brand:hover { text-shadow: 0 0 15px var(--green); }
+  nav .spacer { flex: 1; }
+  nav a {
+    color: var(--dim); text-decoration: none; font-size: 0.8rem;
+    padding: 0.35rem 0.75rem; border: 1px solid transparent;
+    border-radius: 4px; transition: all 0.2s;
   }
-  .glitch:hover { animation-play-state: running; }
-  @keyframes glitch {
-    0% { transform: translate(0); }
-    20% { transform: translate(-2px, 1px); }
-    40% { transform: translate(2px, -1px); }
-    60% { transform: translate(-1px, 0); }
-    80% { transform: translate(1px, 1px); }
-    100% { transform: translate(0); }
-  }
+  nav a:hover, nav a.active { color: var(--green); border-color: var(--dim); background: var(--surface-hover); }
+  nav a.active { border-color: var(--green); box-shadow: 0 0 8px var(--glow); }
+
+  /* ── Header ── */
   header {
-    padding: 2rem; text-align: center; border-bottom: 1px solid var(--matrix-dim);
+    padding: 2rem 2rem 1rem; text-align: center;
+    background: linear-gradient(180deg, var(--surface), transparent);
   }
-  header h1 { font-size: 2.5rem; letter-spacing: 0.3em; text-shadow: 0 0 20px var(--matrix-glow); }
-  header p { color: var(--matrix-dim); margin-top: 0.5rem; }
+  header h1 { font-size: 2.2rem; letter-spacing: 0.3em; text-shadow: 0 0 20px var(--glow), 0 0 40px var(--glow); }
+  header .subtitle { color: var(--text-dim); font-size: 0.75rem; letter-spacing: 0.15em; margin-top: 0.25rem; }
+  header .status-bar {
+    display: flex; justify-content: center; gap: 2rem; margin-top: 1rem;
+    font-size: 0.7rem; color: var(--dim);
+  }
+  header .status-bar span { display: flex; align-items: center; gap: 0.35rem; }
+  header .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); display: inline-block; }
+
+  /* ── Grid ── */
   .grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 1.5rem; padding: 2rem; max-width: 1400px; margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem; padding: 1.5rem 2rem; max-width: 1400px; margin: 0 auto;
   }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
   .card {
-    background: var(--matrix-dark); border: 1px solid var(--matrix-dim);
-    padding: 1.5rem; border-radius: 4px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1.25rem;
+    transition: all 0.3s;
+    cursor: pointer;
   }
-  .card h2 {
-    font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.2em;
-    color: var(--matrix-dim); margin-bottom: 1rem;
+  .card:hover {
+    border-color: var(--dim);
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.05);
+    transform: translateY(-1px);
   }
+  .card.clicked {
+    border-color: var(--green) !important;
+    box-shadow: 0 0 15px var(--glow) !important;
+  }
+  .card-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 0.75rem;
+  }
+  .card-header h2 {
+    font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.15em;
+    color: var(--dim);
+  }
+  .card-header .icon { font-size: 1rem; opacity: 0.6; }
+  .card-body { min-height: 80px; }
   .big-number {
-    font-size: 3rem; font-weight: bold; text-shadow: 0 0 15px var(--matrix-glow);
+    font-size: 2.8rem; font-weight: bold;
+    text-shadow: 0 0 15px var(--glow);
+    transition: color 0.5s;
   }
-  .stat-row { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--matrix-dark); }
-  .bar-container { height: 8px; background: var(--matrix-darker); margin-top: 4px; border-radius: 2px; }
-  .bar-fill { height: 100%; border-radius: 2px; transition: width 1s ease; }
-  .bar-green { background: var(--matrix-green); }
-  .bar-yellow { background: var(--yellow); }
-  .bar-red { background: var(--red); }
-  canvas { width: 100%; max-height: 300px; }
-  .feed { max-height: 400px; overflow-y: auto; }
+  .sub-number { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.25rem; }
+
+  /* ── Stats ── */
+  .stat-row {
+    display: flex; justify-content: space-between; padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(0, 255, 65, 0.05); font-size: 0.8rem;
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .bar-container { height: 6px; background: var(--darker); margin-top: 4px; border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width 0.8s ease; }
+
+  /* ── Feed ── */
+  .feed { max-height: 350px; overflow-y: auto; }
+  .feed::-webkit-scrollbar { width: 4px; }
+  .feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   .feed-item {
-    padding: 0.75rem; border-bottom: 1px solid var(--matrix-dark);
-    font-size: 0.85rem;
+    padding: 0.6rem 0.75rem; border-bottom: 1px solid rgba(0, 255, 65, 0.04);
+    font-size: 0.8rem; transition: background 0.2s;
   }
-  .feed-item .statement { margin-bottom: 0.25rem; }
-  .feed-item .meta { color: var(--matrix-dim); font-size: 0.75rem; }
-  .pending { border-left: 2px solid var(--yellow); }
-  .correct { border-left: 2px solid var(--matrix-green); }
-  .incorrect { border-left: 2px solid var(--red); }
+  .feed-item:hover { background: var(--surface-hover); }
+  .feed-item .statement { margin-bottom: 0.2rem; }
+  .feed-item .meta { color: var(--text-dim); font-size: 0.7rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  .badge {
+    padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.6rem;
+    text-transform: uppercase;
+  }
+  .badge-pending { background: rgba(255,204,0,0.15); color: var(--yellow); }
+  .badge-correct { background: rgba(0,255,65,0.15); color: var(--green); }
+  .badge-incorrect { background: rgba(255,51,51,0.15); color: var(--red); }
+
+  /* ── Charts ── */
+  canvas { width: 100%; max-height: 250px; }
+  .chart-placeholder {
+    display: flex; align-items: center; justify-content: center;
+    height: 150px; color: var(--text-dim); font-size: 0.8rem;
+  }
+
+  /* ── Detail panel (expandable) ── */
+  .detail-panel {
+    display: none; margin-top: 1rem; padding-top: 1rem;
+    border-top: 1px solid var(--border); font-size: 0.8rem;
+    animation: fadeIn 0.3s;
+  }
+  .detail-panel.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ── tabs inside detail panel ── */
+  .mini-tabs { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+  .mini-tab {
+    padding: 0.2rem 0.6rem; font-size: 0.7rem; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 3px;
+    color: var(--dim); transition: all 0.2s;
+  }
+  .mini-tab:hover, .mini-tab.active { color: var(--green); border-color: var(--dim); }
+
+  /* ── Footer ── */
   footer {
-    text-align: center; padding: 2rem; color: var(--matrix-dim); font-size: 0.75rem;
-    border-top: 1px solid var(--matrix-dim);
+    text-align: center; padding: 1.5rem; color: var(--text-dim);
+    font-size: 0.7rem; border-top: 1px solid var(--border);
+    margin-top: auto;
   }
-  .loading { text-align: center; padding: 2rem; animation: pulse 1s infinite; }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; } 50% { opacity: 0.5; }
+
+  /* ── Loading ── */
+  .loading { text-align: center; padding: 2rem; animation: pulse 1s infinite; color: var(--text-dim); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* ── Glow pulse for accuracy ── */
+  @keyframes glowPulse {
+    0%, 100% { text-shadow: 0 0 15px var(--glow); }
+    50% { text-shadow: 0 0 30px var(--green), 0 0 60px var(--glow); }
   }
+  .glow-pulse { animation: glowPulse 2s infinite; }
+
+  /* ── Full-width cards ── */
+  .span-2 { grid-column: span 2; }
+  .span-3 { grid-column: span 3; }
+  @media (max-width: 900px) { .span-2, .span-3 { grid-column: span 1; } }
 </style>
 </head>
 <body>
 <div class="scanline"></div>
 
+<nav>
+  <a href="/" class="brand">◈ THE ORACLE</a>
+  <span class="spacer"></span>
+  <a href="/">▸ PREDICT</a>
+  <a href="#" class="active">▸ DASHBOARD</a>
+  <a href="#" onclick="window.location.reload()">↻ REFRESH</a>
+</nav>
+
 <header>
-  <h1 class="glitch">T H E   O R A C L E</h1>
-  <p>PREDICTIVE INTELLIGENCE ENGINE // CALIBRATION DASHBOARD</p>
+  <h1 class="glow-pulse">C A L I B R A T I O N</h1>
+  <div class="subtitle">PREDICTIVE INTELLIGENCE ENGINE // VERIFIABLE FORECASTS</div>
+  <div class="status-bar">
+    <span><span class="status-dot"></span> LIVE</span>
+    <span id="last-updated">Last updated: --</span>
+    <span id="total-preds">0 predictions</span>
+  </div>
 </header>
 
 <div class="grid">
-  <div class="card" id="accuracy-card">
-    <h2>▸ Overall Accuracy</h2>
-    <div class="big-number" id="accuracy">--</div>
-    <div id="accuracy-detail" style="color:var(--matrix-dim)"></div>
+  <!-- Overall Accuracy -->
+  <div class="card" id="accuracy-card" onclick="toggleDetail('accuracy-detail')">
+    <div class="card-header">
+      <h2>▸ OVERALL ACCURACY</h2>
+      <span class="icon">⊙</span>
+    </div>
+    <div class="card-body">
+      <div class="big-number" id="accuracy">--</div>
+      <div class="sub-number" id="accuracy-sub"></div>
+    </div>
+    <div class="detail-panel" id="accuracy-detail">
+      <div id="accuracy-breakdown"></div>
+    </div>
   </div>
 
-  <div class="card">
-    <h2>▸ Calibration Curve</h2>
-    <canvas id="calibration-chart"></canvas>
+  <!-- Calibration Curve -->
+  <div class="card" id="calibration-card" onclick="toggleDetail('cal-detail')">
+    <div class="card-header">
+      <h2>▸ CALIBRATION CURVE</h2>
+      <span class="icon">◈</span>
+    </div>
+    <div class="card-body">
+      <canvas id="calibration-chart"></canvas>
+    </div>
+    <div class="detail-panel" id="cal-detail">
+      <p style="color:var(--text-dim);font-size:0.75rem">
+        Each dot = a confidence bucket. Closer to the dashed line = better calibrated.
+        <br>A well-calibrated Oracle says "70% confident" and is right 70% of the time.
+        <br><span style="color:var(--green)">Green</span> = accurate | <span style="color:var(--yellow)">Yellow</span> = needs improvement
+      </p>
+    </div>
   </div>
 
-  <div class="card">
-    <h2>▸ By Confidence Bucket</h2>
-    <div id="buckets"><div class="loading">LOADING...</div></div>
+  <!-- By Confidence Bucket -->
+  <div class="card" id="buckets-card" onclick="toggleDetail('buckets-detail')">
+    <div class="card-header">
+      <h2>▸ BY CONFIDENCE BUCKET</h2>
+      <span class="icon">◫</span>
+    </div>
+    <div class="card-body">
+      <div id="buckets"><div class="loading">LOADING...</div></div>
+    </div>
+    <div class="detail-panel" id="buckets-detail">
+      <p style="color:var(--text-dim);font-size:0.75rem">
+        Confidence buckets group predictions by how confident The Oracle was.
+        <br>A well-calibrated system should show accuracy rising with confidence.
+      </p>
+    </div>
   </div>
 
-  <div class="card">
-    <h2>▸ By Category</h2>
-    <div id="categories"><div class="loading">LOADING...</div></div>
+  <!-- By Category -->
+  <div class="card" id="category-card" onclick="toggleDetail('cat-detail')">
+    <div class="card-header">
+      <h2>▸ BY CATEGORY</h2>
+      <span class="icon">⊞</span>
+    </div>
+    <div class="card-body">
+      <div id="categories"><div class="loading">LOADING...</div></div>
+    </div>
+    <div class="detail-panel" id="cat-detail">
+      <div class="mini-tabs">
+        <span class="mini-tab active" onclick="event.stopPropagation();filterCategory('all')">ALL</span>
+        <span class="mini-tab" onclick="event.stopPropagation();filterCategory('tech_trend')">TECH</span>
+        <span class="mini-tab" onclick="event.stopPropagation();filterCategory('market_move')">MARKET</span>
+        <span class="mini-tab" onclick="event.stopPropagation();filterCategory('product_launch')">PRODUCT</span>
+      </div>
+      <div id="cat-filtered"></div>
+    </div>
   </div>
 
-  <div class="card" style="grid-column: span 2;">
-    <h2>▸ Recent Predictions</h2>
-    <div class="feed" id="feed"><div class="loading">LOADING...</div></div>
+  <!-- Recent Predictions (full width) -->
+  <div class="card span-3" id="feed-card" onclick="toggleDetail('feed-detail')">
+    <div class="card-header">
+      <h2>▸ RECENT PREDICTIONS</h2>
+      <span class="icon" style="font-size:0.7rem">click to expand</span>
+    </div>
+    <div class="card-body">
+      <div class="feed" id="feed"><div class="loading">LOADING...</div></div>
+    </div>
+    <div class="detail-panel" id="feed-detail">
+      <div class="mini-tabs">
+        <span class="mini-tab active" onclick="event.stopPropagation();filterFeed('all')">ALL</span>
+        <span class="mini-tab" onclick="event.stopPropagation();filterFeed('pending')">PENDING</span>
+        <span class="mini-tab" onclick="event.stopPropagation();filterFeed('correct')">CORRECT</span>
+        <span class="mini-tab" onclick="event.stopPropagation();filterFeed('incorrect')">INCORRECT</span>
+      </div>
+    </div>
   </div>
 </div>
 
 <footer>
-  THE ORACLE v0.1.0 // AZURE CONTAINER APPS (EASTUS2) // ALL PREDICTIONS VERIFIABLE
+  THE ORACLE v0.2.0 // AZURE CONTAINER APPS (EASTUS2) // ANTI-HALLUCINATION MCP GROUNDING ENABLED // ALL PREDICTIONS VERIFIABLE
 </footer>
 
 <script>
+let cachedData = null;
+
 async function load() {
   try {
     const r = await fetch('/v1/dashboard');
-    const d = await r.json();
-    const cal = d.calibration;
-    const preds = d.recent_predictions;
-
-    // Accuracy
-    const acc = cal.overall_accuracy || 0;
-    const color = acc >= 0.7 ? '#00ff41' : acc >= 0.5 ? '#ffcc00' : '#ff3333';
-    document.getElementById('accuracy').style.color = color;
-    document.getElementById('accuracy').textContent = (acc * 100).toFixed(1) + '%';
-    document.getElementById('accuracy-detail').textContent =
-      cal.overall_correct + ' / ' + cal.overall_total + ' predictions correct';
-
-    // Buckets
-    const bucketsDiv = document.getElementById('buckets');
-    bucketsDiv.innerHTML = '';
-    (cal.buckets || []).forEach(b => {
-      const a = b.accuracy || 0;
-      const c = a >= 0.7 ? '#00ff41' : a >= 0.5 ? '#ffcc00' : '#ff3333';
-      bucketsDiv.innerHTML += `
-        <div style="margin-bottom:0.75rem">
-          <div class="stat-row">
-            <span>${b.confidence_range}</span>
-            <span style="color:${c}">${b.correct}/${b.total} (${(a*100).toFixed(0)}%)</span>
-          </div>
-          <div class="bar-container"><div class="bar-fill" style="width:${a*100}%;background:${c}"></div></div>
-        </div>`;
-    });
-
-    // Categories
-    const catDiv = document.getElementById('categories');
-    catDiv.innerHTML = '';
-    const byCat = cal.by_category || {};
-    Object.entries(byCat).forEach(([cat, data]) => {
-      const a = data.accuracy || 0;
-      const c = a >= 0.7 ? '#00ff41' : a >= 0.5 ? '#ffcc00' : '#ff3333';
-      catDiv.innerHTML += `
-        <div style="margin-bottom:0.75rem">
-          <div class="stat-row">
-            <span>${cat}</span>
-            <span style="color:${c}">${data.correct}/${data.total} (${(a*100).toFixed(0)}%)</span>
-          </div>
-          <div class="bar-container"><div class="bar-fill" style="width:${a*100}%;background:${c}"></div></div>
-        </div>`;
-    });
-
-    // Feed
-    const feedDiv = document.getElementById('feed');
-    feedDiv.innerHTML = '';
-    preds.forEach(p => {
-      const conf = (p.confidence * 100).toFixed(0);
-      feedDiv.innerHTML += `
-        <div class="feed-item ${p.status}">
-          <div class="statement">${p.statement}</div>
-          <div class="meta">
-            [${p.category}] ${conf}% confidence
-            ${p.deadline ? ' · deadline: ' + p.deadline.slice(0,10) : ''}
-            ${p.resolution ? ' · resolved: ' + p.resolution : ''}
-          </div>
-        </div>`;
-    });
-
-    // Calibration chart
-    drawChart(cal.buckets || []);
+    cachedData = await r.json();
+    render(cachedData);
+    document.getElementById('last-updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
   } catch(e) {
-    document.body.innerHTML += '<div style="color:#ff3333;text-align:center;padding:2rem">CONNECTION ERROR: Is the Oracle running? (port 8001)</div>';
+    document.body.innerHTML += '<div style="color:var(--red);text-align:center;padding:2rem">✗ CONNECTION ERROR: Is the Oracle running? (port 8001)</div>';
   }
+}
+
+function render(d) {
+  const cal = d.calibration || {};
+  const preds = d.recent_predictions || [];
+
+  // Accuracy
+  const acc = cal.overall_accuracy || 0;
+  const correct = cal.overall_correct || 0;
+  const total = cal.overall_total || 0;
+  const color = acc >= 0.7 ? 'var(--green)' : acc >= 0.5 ? 'var(--yellow)' : 'var(--red)';
+  const accEl = document.getElementById('accuracy');
+  accEl.style.color = color;
+  accEl.textContent = (acc * 100).toFixed(1) + '%';
+  document.getElementById('accuracy-sub').textContent = correct + ' / ' + total + ' predictions correct';
+  document.getElementById('total-preds').textContent = total + ' total predictions';
+
+  if (acc >= 0.7) accEl.classList.add('glow-pulse');
+
+  // Breakdown
+  const breakdown = document.getElementById('accuracy-breakdown');
+  breakdown.innerHTML = `
+    <div class="stat-row"><span>Total Predictions</span><span>${total}</span></div>
+    <div class="stat-row"><span>Resolved Correct</span><span style="color:var(--green)">${correct}</span></div>
+    <div class="stat-row"><span>Resolved Incorrect</span><span style="color:var(--red)">${total - correct}</span></div>
+    <div class="stat-row"><span>Pending</span><span style="color:var(--yellow)">${(d.pending_count || cal.pending || 0)}</span></div>
+  `;
+
+  // Buckets
+  const bucketsDiv = document.getElementById('buckets');
+  bucketsDiv.innerHTML = '';
+  (cal.buckets || []).forEach(b => {
+    const a = b.accuracy || 0;
+    const c = a >= 0.7 ? 'var(--green)' : a >= 0.5 ? 'var(--yellow)' : 'var(--red)';
+    bucketsDiv.innerHTML += `
+      <div style="margin-bottom:0.6rem">
+        <div class="stat-row">
+          <span>${b.confidence_range}</span>
+          <span style="color:${c}">${b.correct}/${b.total} (${(a*100).toFixed(0)}%)</span>
+        </div>
+        <div class="bar-container"><div class="bar-fill" style="width:${a*100}%;background:${c}"></div></div>
+      </div>`;
+  });
+
+  // Categories
+  renderCategories(cal.by_category || {});
+
+  // Feed
+  renderFeed(preds);
+
+  // Chart
+  drawChart(cal.buckets || []);
+}
+
+function renderCategories(byCat) {
+  const catDiv = document.getElementById('categories');
+  catDiv.innerHTML = '';
+  const entries = Object.entries(byCat);
+  if (!entries.length) { catDiv.innerHTML = '<div class="chart-placeholder">No category data yet</div>'; return; }
+  entries.forEach(([cat, data]) => {
+    const a = data.accuracy || 0;
+    const c = a >= 0.7 ? 'var(--green)' : a >= 0.5 ? 'var(--yellow)' : 'var(--red)';
+    const label = cat.replace(/_/g, ' ').toUpperCase();
+    catDiv.innerHTML += `
+      <div style="margin-bottom:0.6rem">
+        <div class="stat-row">
+          <span>${label}</span>
+          <span style="color:${c}">${data.correct}/${data.total} (${(a*100).toFixed(0)}%)</span>
+        </div>
+        <div class="bar-container"><div class="bar-fill" style="width:${a*100}%;background:${c}"></div></div>
+      </div>`;
+  });
+}
+
+function renderFeed(preds) {
+  const feedDiv = document.getElementById('feed');
+  feedDiv.innerHTML = '';
+  if (!preds.length) { feedDiv.innerHTML = '<div class="chart-placeholder">No predictions yet. <a href="/" style="color:var(--green)">Make one →</a></div>'; return; }
+  preds.forEach(p => {
+    const conf = (p.confidence * 100).toFixed(0);
+    const badgeClass = p.status === 'correct' ? 'badge-correct' : p.status === 'incorrect' ? 'badge-incorrect' : 'badge-pending';
+    feedDiv.innerHTML += `
+      <div class="feed-item" data-status="${p.status || 'pending'}">
+        <div class="statement">${p.statement}</div>
+        <div class="meta">
+          <span class="badge ${badgeClass}">${p.status || 'pending'}</span>
+          <span>[${p.category}] ${conf}% confidence</span>
+          ${p.deadline ? '<span>⏱ ' + p.deadline.slice(0,10) + '</span>' : ''}
+          ${p.resolution ? '<span>✓ ' + p.resolution + '</span>' : ''}
+        </div>
+      </div>`;
+  });
 }
 
 function drawChart(buckets) {
   const canvas = document.getElementById('calibration-chart');
-  if (!canvas || !buckets.length) return;
+  if (!canvas || !buckets.length) {
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0a0f0a'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#006618'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('No calibration data yet', canvas.width/2, canvas.height/2);
+    }
+    return;
+  }
   const ctx = canvas.getContext('2d');
-  const W = canvas.width = canvas.parentElement.clientWidth - 48;
-  const H = canvas.height = 280;
-  const pad = 40;
+  const W = canvas.width = canvas.parentElement.clientWidth - 40;
+  const H = canvas.height = 230;
+  const pad = 35;
 
   // Background
-  ctx.fillStyle = '#0a0f0a';
+  ctx.fillStyle = '#080d08';
   ctx.fillRect(0, 0, W, H);
 
-  // Grid
-  ctx.strokeStyle = '#0d1a0d';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 10; i++) {
+  // Grid lines
+  ctx.strokeStyle = '#0a1a0a';
+  ctx.lineWidth = 0.5;
+  for (let i = 1; i <= 9; i++) {
     const y = pad + (H - pad * 2) * (1 - i / 10);
     ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W - pad, y); ctx.stroke();
+    const x = pad + (W - pad * 2) * (i / 10);
+    ctx.beginPath(); ctx.moveTo(x, pad); ctx.lineTo(x, H - pad); ctx.stroke();
   }
 
   // Diagonal (perfect calibration)
-  ctx.strokeStyle = '#00ff4122';
+  ctx.strokeStyle = 'rgba(0, 255, 65, 0.08)';
   ctx.lineWidth = 2;
-  ctx.setLineDash([5, 5]);
+  ctx.setLineDash([6, 6]);
   ctx.beginPath();
   ctx.moveTo(pad, H - pad);
   ctx.lineTo(W - pad, pad);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Data points
+  // Data points with glow
   buckets.forEach(b => {
     if (!b.total) return;
-    const range = b.confidence_range;
-    const parts = range.split('-');
+    const parts = b.confidence_range.split('-');
     const midX = (parseFloat(parts[0]) + parseFloat(parts[1])) / 2;
     const x = pad + midX * (W - pad * 2);
     const y = H - pad - (b.accuracy || 0) * (H - pad * 2);
-    const r = Math.min(12, Math.max(4, Math.sqrt(b.total) * 2));
+    const r = Math.min(14, Math.max(5, Math.sqrt(b.total) * 2.5));
+    const fillColor = (b.accuracy || 0) >= 0.7 ? '#00ff41' : '#ffcc00';
 
+    // Glow halo
+    const glow = ctx.createRadialGradient(x, y, r * 0.3, x, y, r * 2.5);
+    glow.addColorStop(0, fillColor + '88');
+    glow.addColorStop(1, 'transparent');
+    ctx.beginPath(); ctx.arc(x, y, r * 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = glow; ctx.fill();
+
+    // Dot
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = (b.accuracy || 0) >= 0.7 ? '#00ff41' : '#ffcc00';
+    ctx.fillStyle = fillColor;
     ctx.fill();
-    ctx.strokeStyle = '#0a0f0a';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#050805';
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   });
 
   // Labels
-  ctx.fillStyle = '#008f22';
-  ctx.font = '11px monospace';
+  ctx.fillStyle = '#005511';
+  ctx.font = '10px monospace';
   ctx.textAlign = 'center';
   ctx.fillText('CONFIDENCE', W/2, H-5);
   ctx.save();
-  ctx.translate(10, H/2);
+  ctx.translate(8, H/2);
   ctx.rotate(-Math.PI/2);
   ctx.fillText('ACCURACY', 0, 0);
   ctx.restore();
+  ctx.fillText('0', pad-8, H-pad+14);
+  ctx.fillText('50%', W/2, H-pad+14);
+  ctx.fillText('100%', W-pad+8, H-pad+14);
+}
 
-  ctx.fillText('0%', pad, H-pad+15);
-  ctx.fillText('50%', W/2, H-pad+15);
-  ctx.fillText('100%', W-pad, H-pad+15);
+function toggleDetail(id) {
+  const panel = document.getElementById(id);
+  if (!panel) return;
+  panel.classList.toggle('active');
+  // Visual feedback on parent card
+  const card = panel.closest('.card');
+  if (card && panel.classList.contains('active')) {
+    card.classList.add('clicked');
+  } else if (card) {
+    card.classList.remove('clicked');
+  }
+}
+
+function filterCategory(cat) {
+  document.querySelectorAll('#cat-detail .mini-tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  if (!cachedData) return;
+  const byCat = cachedData.calibration.by_category || {};
+  if (cat === 'all') { renderCategories(byCat); return; }
+  const filtered = {};
+  if (byCat[cat]) filtered[cat] = byCat[cat];
+  renderCategories(filtered);
+}
+
+function filterFeed(status) {
+  document.querySelectorAll('#feed-detail .mini-tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  const items = document.querySelectorAll('#feed .feed-item');
+  items.forEach(item => {
+    if (status === 'all' || item.dataset.status === status) {
+      item.style.display = '';
+    } else {
+      item.style.display = 'none';
+    }
+  });
 }
 
 load();
-setInterval(load, 30000); // refresh every 30s
+setInterval(load, 30000);
 </script>
 </body>
 </html>

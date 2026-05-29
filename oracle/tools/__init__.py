@@ -2,6 +2,8 @@
 
 Provides real-time web search and content extraction to ground
 LLM outputs in actual data. No hallucinations. No lying.
+
+v0.2.0 — Added MCP server grounding (Microsoft Docs, Context7, DeepWiki, HF)
 """
 
 from __future__ import annotations
@@ -76,25 +78,22 @@ async def web_search(query: str, max_results: int = 5) -> List[SearchResult]:
 
 async def web_fetch(url: str, max_chars: int = 3000) -> str:
     """Fetch and extract clean text content from a URL."""
-    # Normalize protocol-relative URLs from DuckDuckGo
     if url.startswith("//"):
         url = "https:" + url
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; GenesisEngine/1.0)"
+                "User-Agent": "Mozilla/5.0 (compatible; OracleEngine/1.0)"
             }
             r = await client.get(url, headers=headers)
             r.raise_for_status()
 
             soup = BeautifulSoup(r.text, "html.parser")
 
-            # Remove noise
             for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
                 tag.decompose()
 
             text = soup.get_text(separator="\n", strip=True)
-            # Collapse whitespace
             text = re.sub(r"\n{3,}", "\n\n", text)
             text = re.sub(r"[ \t]{2,}", " ", text)
 
@@ -112,12 +111,10 @@ async def research_topic(query: str, fetch_depth: int = 2) -> WebContext:
     """
     context = WebContext(query=query)
 
-    # Step 1: Search
     context.results = await web_search(query, max_results=5)
     if not context.results:
         return context
 
-    # Step 2: Fetch top N results for deep context
     tasks = [web_fetch(r.url) for r in context.results[:fetch_depth]]
     contents = await asyncio.gather(*tasks)
     context.fetched_content = [c for c in contents if c]
@@ -139,7 +136,6 @@ def format_context_for_prompt(context: WebContext, max_chars: int = 3000) -> str
             lines.append(f"    {result.snippet[:200]}")
         lines.append("")
 
-    # Add fetched content
     if context.fetched_content:
         lines.append("## Deep Context (fetched pages)")
         for i, content in enumerate(context.fetched_content[:2]):
@@ -148,3 +144,51 @@ def format_context_for_prompt(context: WebContext, max_chars: int = 3000) -> str
             lines.append("")
 
     return "\n".join(lines)
+
+
+# ── Multi-Source Grounding (v0.2.0) ──────────────────────────────────────
+
+async def multi_source_grounding(query: str) -> str:
+    """Ground a query across multiple authoritative sources.
+
+    Tries MCP servers first (Microsoft Docs, Context7, DeepWiki),
+    then falls back to web search. Returns formatted context with
+    source attribution for LLM prompts. This is the primary
+    anti-hallucination tool.
+    """
+    parts = []
+
+    # 1. Try MCP grounding (authoritative sources)
+    try:
+        from oracle.tools.mcp_client import mcp_grounding
+        mcp_text = await mcp_grounding(query)
+        if mcp_text and "## Authoritative Grounding" in mcp_text:
+            parts.append(mcp_text)
+            logger.info("MCP grounding successful for: %s", query[:80])
+    except Exception as e:
+        logger.debug("MCP grounding unavailable: %s", e)
+
+    # 2. Web research (always runs as supplement)
+    try:
+        web_ctx = await research_topic(query)
+        web_text = format_context_for_prompt(web_ctx)
+        if web_text:
+            parts.append(web_text)
+    except Exception as e:
+        logger.debug("Web research failed: %s", e)
+
+    if not parts:
+        return ""
+
+    return "\n\n".join(parts)
+
+
+__all__ = [
+    "SearchResult",
+    "WebContext",
+    "web_search",
+    "web_fetch",
+    "research_topic",
+    "format_context_for_prompt",
+    "multi_source_grounding",
+]

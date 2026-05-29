@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from oracle.tools import research_topic, format_context_for_prompt
+from oracle.tools import research_topic, format_context_for_prompt, multi_source_grounding
 from oracle.prediction.verify import verify_predictions
 
 from oracle.llm import LLMProvider, LLMResponse
@@ -77,14 +77,18 @@ class PredictionEngine:
             logger.warning("generate() called with empty signals and no question")
             return []
 
-        # Step 0: Research the question for web grounding
+        # Step 0: Multi-source grounding — MCP + web for anti-hallucination
         web_grounding = ""
         if question:
-            web_context = await research_topic(question)
-            web_grounding = format_context_for_prompt(web_context)
-            if web_context.results:
-                logger.info("Predictions grounded with %d web results for: %s",
-                           len(web_context.results), question[:80])
+            # Use multi-source grounding (MCP servers + web search)
+            web_grounding = await multi_source_grounding(question)
+            if not web_grounding:
+                # Fallback to basic web research
+                web_context = await research_topic(question)
+                web_grounding = format_context_for_prompt(web_context)
+            if web_grounding:
+                logger.info("Predictions grounded with multi-source data for: %s",
+                           question[:80])
 
         # Build the prompt
         system_prompt = _build_system_prompt(categories)

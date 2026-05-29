@@ -27,8 +27,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="The Oracle",
-    description="Predictive intelligence engine — specific, verifiable, time-bound forecasts with calibrated confidence.",
-    version="0.1.0",
+    description="Predictive intelligence engine — specific, verifiable, time-bound forecasts with calibrated confidence. Multi-source MCP grounding enabled.",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
