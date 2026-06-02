@@ -87,7 +87,7 @@ class SignalRepository:
             record = SignalRecord(
                 id=s.id, source=s.source, content=s.content,
                 entities=s.entities, sentiment=s.sentiment,
-                relevance=s.relevance, metadata=s.metadata,
+                relevance=s.relevance, extra_data=s.metadata,
                 captured_at=s.captured_at,
             )
             self.session.add(record)

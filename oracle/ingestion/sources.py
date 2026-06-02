@@ -1,13 +1,21 @@
-"""Ingestion sources for The Oracle."""
+"""Ingestion sources for The Oracle.
+
+Delegates to IngestionPipeline for full automated ingestion from
+news, financial, social media, GitHub, and arXiv.
+
+Also retains the legacy direct-source ingestors for backward compatibility.
+
+CITATION: Boil the Ocean upgrade — orchestrates IngestionPipeline.
+Session: Hermes Agent, 2026-06-01.
+BACK-LINK: /home/tedch/the-oracle/oracle/ingestion/pipeline.py
+"""
+
+from __future__ import annotations
 
 import asyncio
 import hashlib
 import logging
-from typing import List
-from datetime import datetime, timezone
-
-import httpx
-import feedparser
+from typing import List, Optional
 
 from oracle.models.prediction import Signal
 
@@ -18,11 +26,12 @@ def _make_id(source: str, content: str) -> str:
     return hashlib.sha256(f"{source}:{content}".encode()).hexdigest()[:16]
 
 
-# ── Hacker News ──────────────────────────────────────────────
+# ── Legacy direct ingestors (kept for backward compat) ──────────
 
 
 async def ingest_hackernews(limit: int = 30) -> List[Signal]:
     """Fetch top stories from Hacker News API."""
+    import httpx
     signals = []
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -61,11 +70,10 @@ async def ingest_hackernews(limit: int = 30) -> List[Signal]:
     return signals
 
 
-# ── Reddit ───────────────────────────────────────────────────
-
-
 async def ingest_reddit() -> List[Signal]:
     """Fetch from r/technology and r/programming via RSS."""
+    import feedparser
+    import httpx
     signals = []
     subreddits = [
         ("https://www.reddit.com/r/technology/.rss", "reddit_technology"),
@@ -91,11 +99,9 @@ async def ingest_reddit() -> List[Signal]:
     return signals
 
 
-# ── GitHub Trending ──────────────────────────────────────────
-
-
 async def ingest_github_trending() -> List[Signal]:
     """Fetch trending repositories from GitHub."""
+    import httpx
     signals = []
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -129,11 +135,9 @@ async def ingest_github_trending() -> List[Signal]:
     return signals
 
 
-# ── Tech News RSS ────────────────────────────────────────────
-
-
 async def ingest_tech_news() -> List[Signal]:
     """Fetch from TechCrunch, The Verge, Ars Technica RSS feeds."""
+    import feedparser
     signals = []
     feeds = [
         ("https://techcrunch.com/feed/", "techcrunch"),
@@ -158,9 +162,6 @@ async def ingest_tech_news() -> List[Signal]:
             logger.warning("%s ingestion failed: %s", source_name, e)
     logger.info("Tech News: %d signals", len(signals))
     return signals
-
-
-# ── Yahoo Finance ────────────────────────────────────────────
 
 
 async def ingest_yfinance() -> List[Signal]:
@@ -203,11 +204,11 @@ async def ingest_yfinance() -> List[Signal]:
     return signals
 
 
-# ── Combined ─────────────────────────────────────────────────
+# ── Combined ingestion (legacy + pipeline) ─────────────────────
 
 
 async def ingest_all() -> List[Signal]:
-    """Run all ingestion sources in parallel."""
+    """Run all ingestion sources in parallel (legacy mode)."""
     results = await asyncio.gather(
         ingest_hackernews(),
         ingest_reddit(),
@@ -226,9 +227,27 @@ async def ingest_all() -> List[Signal]:
     return all_signals
 
 
+async def ingest_pipeline(
+    sources: Optional[List[str]] = None,
+    max_signals: int = 200,
+) -> List[Signal]:
+    """Run the full automated ingestion pipeline (new pipeline mode).
+
+    Uses the IngestionPipeline which ingests from gstack_tools providers
+    (news, financial, social, github, arxiv) with deduplication and scoring.
+
+    Args:
+        sources: Specific sources. None = all.
+        max_signals: Max signals to return.
+    """
+    from oracle.ingestion.pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline()
+    return await pipeline.run(sources=sources, max_signals=max_signals)
+
+
 def _extract_entities(text: str) -> List[str]:
     """Simple entity extraction from text (company names, products)."""
-    # Basic keyword matching — the SignalExtractor does the real NLP
     known = ["Apple", "Google", "Microsoft", "Meta", "Amazon", "Nvidia",
              "Tesla", "OpenAI", "Anthropic", "ChatGPT", "Claude", "Gemini",
              "iOS", "Android", "Windows", "Linux", "React", "Python",

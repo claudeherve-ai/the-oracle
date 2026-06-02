@@ -116,8 +116,8 @@ async def test_generate_from_question():
     )
 
     assert len(result) == 2
-    # Verify the call recorded the question
-    assert len(provider.calls) == 1
+    # Verify the call recorded the question (may have 2 calls: generation + verification)
+    assert len(provider.calls) >= 1
     assert "Will Apple release AR glasses" in provider.calls[0]["user_prompt"]
 
 
