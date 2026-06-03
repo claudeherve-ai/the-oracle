@@ -6,7 +6,7 @@ votes, resolution results, and verification reports.
 
 from enum import Enum
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import uuid
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -64,6 +64,16 @@ class Prediction(BaseModel):
     contributing_models: List[str] = Field(
         default_factory=list,
         description="Models that contributed to this prediction"
+    )
+    #: Contextualized track record for this prediction's confidence + category,
+    #: computed from resolved history. Lets the UI show "70% confident — this
+    #: category has been right 68% of the time across 142 resolved predictions
+    #: at this confidence level" instead of a bare, unaudited number. ``None``
+    #: until :meth:`oracle.prediction.engine.PredictionEngine.contextualize`
+    #: (or the API) populates it. See ``oracle.calibration.tracker.TrackRecord``.
+    track_record: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Historical accuracy context for this confidence/category",
     )
 
     @property

@@ -259,9 +259,29 @@ def compute_full_report(
     )
 
 
+def serialize_full_report(report: AdvancedCalibrationReport) -> Dict[str, object]:
+    """Serialize an :class:`AdvancedCalibrationReport` to a JSON-safe dict.
+
+    ``dataclasses.asdict`` does not include ``@property`` values, and leaves
+    ``generated_at`` as a ``datetime``. This makes the derived ``ece`` and
+    ``is_well_calibrated`` fields first-class in the payload and ISO-encodes the
+    timestamp, so the advanced-metrics endpoint returns a stable, audit-friendly
+    shape regardless of the serializer downstream.
+    """
+    from dataclasses import asdict
+
+    payload: Dict[str, object] = asdict(report)
+    generated = payload.get("generated_at")
+    if isinstance(generated, datetime):
+        payload["generated_at"] = generated.isoformat()
+    payload["ece"] = round(report.ece, 6)
+    payload["is_well_calibrated"] = report.is_well_calibrated
+    return payload
+
+
 __all__ = [
     "CalibrationCurve", "DecompositionResult", "AdvancedCalibrationReport",
     "compute_brier_score", "compute_calibration_curve",
     "compute_decomposition", "compute_confidence_coverage",
-    "compute_full_report",
+    "compute_full_report", "serialize_full_report",
 ]

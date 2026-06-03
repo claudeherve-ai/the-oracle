@@ -23,6 +23,7 @@ from oracle.audit import (
     PredictionAudit,
 )
 from oracle.llm import LLMProvider, LLMResponse
+from oracle.calibration.tracker import ConfidenceContextualizer
 from oracle.models.prediction import (
     Category,
     Prediction,
@@ -252,6 +253,32 @@ class PredictionEngine:
 
         logger.info("Generated %d predictions", len(predictions))
         return predictions
+
+    def contextualize(
+        self,
+        predictions: List[Prediction],
+        history: List[Prediction],
+        *,
+        min_samples: int = 5,
+    ) -> List[Prediction]:
+        """Attach a historical track record to each prediction's confidence (E17).
+
+        Never show a number without its track record. Given the resolved
+        ``history`` (audited, scored predictions), this populates each
+        prediction's ``track_record`` with how often the system has actually
+        been right for the same category at the same confidence band — turning a
+        bare ``0.70`` into an auditable "70% confident, and here's the receipts".
+
+        Pure, synchronous, no network. Mutates and returns ``predictions``.
+
+        Args:
+            predictions: Fresh predictions to contextualize (mutated in place).
+            history: Resolved predictions to compute the track record from.
+            min_samples: Minimum resolved samples in a bucket before its accuracy
+                is treated as *proven* rather than provisional.
+        """
+        contextualizer = ConfidenceContextualizer(min_samples=min_samples)
+        return contextualizer.contextualize(predictions, history)
 
     # ------------------------------------------------------------------
     # Audit trail (D14)
