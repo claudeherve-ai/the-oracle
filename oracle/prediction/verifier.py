@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from oracle.tools import research_topic, web_search, SearchResult
+from oracle.tools.nli import EntailmentJudge, LLMEntailmentJudge
 
 from oracle.llm import LLMProvider, LLMResponse
 from oracle.models.prediction import Prediction
@@ -25,11 +26,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SourceEvidence:
-    """Evidence from a single source."""
+    """Evidence from a single source, judged by natural-language inference."""
     url: str
     title: str
     snippet: str = ""
-    supports: bool = False  # True = supports prediction, False = contradicts
+    supports: bool = False  # True = entails prediction (quote-verified)
+    stance: str = "neutral"  # supports | contradicts | neutral
+    quote: str = ""  # exact verbatim span the judge relied on
     relevance: float = 0.0  # 0-1
     credibility: float = 0.5  # 0-1 based on source authority
 
@@ -81,8 +84,10 @@ class VerificationEngine:
     to find supporting or contradicting evidence for each prediction.
     """
 
-    def __init__(self, llm: LLMProvider):
+    def __init__(self, llm: LLMProvider, *, judge: Optional[EntailmentJudge] = None):
         self._llm = llm
+        # NLI judge is the trust boundary; injectable for testing/mocking.
+        self._judge: EntailmentJudge = judge or LLMEntailmentJudge(llm)
 
     async def verify(
         self,
@@ -118,34 +123,41 @@ class VerificationEngine:
         return verified
 
     async def _verify_one(self, pred: Prediction, deep: bool) -> VerificationResult:
-        """Verify a single prediction."""
+        """Verify a single prediction using NLI-judged, quote-verified evidence."""
         statement = pred.statement
         logger.debug("Verifying: %s", statement[:80])
 
-        # Run all source checks in parallel
-        web_evidence, news_evidence, financial_evidence, github_evidence, arxiv_evidence = (
-            await asyncio.gather(
-                self._check_web(statement),
-                self._check_news(statement),
-                self._check_financial(statement),
-                self._check_github(statement),
-                self._check_arxiv(statement),
-                return_exceptions=True,
-            )
+        # Run all source searches in parallel; each returns raw SearchResults.
+        raw_lists = await asyncio.gather(
+            self._check_web(statement),
+            self._check_news(statement),
+            self._check_financial(statement),
+            self._check_github(statement),
+            self._check_arxiv(statement),
+            return_exceptions=True,
         )
 
-        # Collect all evidence
-        all_evidence: List[SourceEvidence] = []
-        for ev_list in [web_evidence, news_evidence, financial_evidence, github_evidence, arxiv_evidence]:
-            if isinstance(ev_list, list):
-                all_evidence.extend(ev_list)
+        # Flatten + dedupe by URL (first occurrence wins).
+        seen: set[str] = set()
+        unique_results: List[SearchResult] = []
+        for rl in raw_lists:
+            if not isinstance(rl, list):
+                continue
+            for r in rl:
+                if not getattr(r, "url", None) or r.url in seen:
+                    continue
+                seen.add(r.url)
+                unique_results.append(r)
 
-        # Score
-        supporting = [e for e in all_evidence if e.supports]
-        contradicting = [e for e in all_evidence if not e.supports]
-        total_cred = sum(e.credibility for e in all_evidence)
+        # Judge every unique source with the NLI entailment judge.
+        all_evidence = await self._judge_results(statement, unique_results)
 
-        if not all_evidence:
+        # Only quote-verified stances count toward the verdict; neutral excluded.
+        supporting = [e for e in all_evidence if e.stance == "supports"]
+        contradicting = [e for e in all_evidence if e.stance == "contradicts"]
+        decisive = supporting + contradicting
+
+        if not decisive:
             verdict = "unverifiable"
             adjusted_conf = pred.confidence
         elif len(contradicting) > len(supporting) * 2:
@@ -153,7 +165,8 @@ class VerificationEngine:
             adjusted_conf = max(0.01, pred.confidence - 0.25)
         elif len(supporting) > len(contradicting) * 3:
             verdict = "supported"
-            boost = min(0.15, total_cred / max(len(all_evidence), 1) * 0.15)
+            total_cred = sum(e.credibility for e in supporting)
+            boost = min(0.15, total_cred / max(len(supporting), 1) * 0.15)
             adjusted_conf = min(0.99, pred.confidence + boost)
         elif len(supporting) > len(contradicting):
             verdict = "mixed_supporting"
@@ -162,22 +175,22 @@ class VerificationEngine:
             verdict = "mixed"
             adjusted_conf = max(0.01, pred.confidence - 0.1)
 
-        # Confidence interval: tighter with more evidence
-        evidence_count = len(all_evidence)
-        if evidence_count > 5:
+        # Confidence interval: tighter with more decisive evidence.
+        decisive_count = len(decisive)
+        if decisive_count > 5:
             ci_half = 0.05
-        elif evidence_count > 2:
+        elif decisive_count > 2:
             ci_half = 0.08
         else:
             ci_half = 0.12
 
         summary_parts = []
         if supporting:
-            summary_parts.append(f"{len(supporting)} sources support")
+            summary_parts.append(f"{len(supporting)} sources entail (quoted)")
         if contradicting:
-            summary_parts.append(f"{len(contradicting)} sources contradict")
+            summary_parts.append(f"{len(contradicting)} sources contradict (quoted)")
         if not summary_parts:
-            summary_parts.append("No relevant sources found")
+            summary_parts.append("No quote-verified evidence found")
 
         return VerificationResult(
             prediction_id=pred.id,
@@ -194,49 +207,58 @@ class VerificationEngine:
             total_sources_checked=len(all_evidence),
         )
 
-    # ---- Source checkers ----
+    async def _judge_results(
+        self, statement: str, results: List[SearchResult]
+    ) -> List[SourceEvidence]:
+        """Run the NLI judge over each search result and build SourceEvidence.
 
-    async def _check_web(self, statement: str) -> List[SourceEvidence]:
+        The judge decides ENTAILS/CONTRADICTS/NEUTRAL and must quote a verbatim
+        span; an unquotable verdict is downgraded to neutral inside the judge.
+        """
+        if not results:
+            return []
+
+        async def _one(r: SearchResult) -> SourceEvidence:
+            evidence_text = f"{r.title}. {r.snippet}".strip(". ")
+            judgment = await self._judge.judge(
+                statement, evidence_text, source_url=r.url
+            )
+            return SourceEvidence(
+                url=r.url,
+                title=r.title,
+                snippet=r.snippet,
+                supports=judgment.supports,
+                stance=judgment.stance,
+                quote=judgment.quote if judgment.quote_verified else "",
+                relevance=1.0 if judgment.stance != "neutral" else 0.3,
+                credibility=_credibility(r.url),
+            )
+
+        judged = await asyncio.gather(
+            *[_one(r) for r in results], return_exceptions=True
+        )
+        return [e for e in judged if isinstance(e, SourceEvidence)]
+
+    # ---- Source checkers (return raw SearchResults; judging is centralized) ----
+
+    async def _check_web(self, statement: str) -> List[SearchResult]:
         """Check via web search."""
         try:
             context = await research_topic(statement, fetch_depth=2)
-            evidence = []
-            for r in context.results[:5]:
-                ev = SourceEvidence(
-                    url=r.url,
-                    title=r.title,
-                    snippet=r.snippet,
-                    supports=self._guess_support(r.snippet, r.title, statement),
-                    relevance=0.6,
-                    credibility=_credibility(r.url),
-                )
-                evidence.append(ev)
-            return evidence
+            return list(context.results[:5])
         except Exception as e:
             logger.debug("Web check failed: %s", e)
             return []
 
-    async def _check_news(self, statement: str) -> List[SourceEvidence]:
+    async def _check_news(self, statement: str) -> List[SearchResult]:
         """Check via a targeted news-oriented web search."""
         try:
-            results = await web_search(f"{statement} news", max_results=5)
-            evidence = []
-            for r in results:
-                ev = SourceEvidence(
-                    url=r.url,
-                    title=r.title,
-                    snippet=r.snippet,
-                    supports=self._guess_support(r.snippet, r.title, statement),
-                    relevance=0.5,
-                    credibility=_credibility(r.url),
-                )
-                evidence.append(ev)
-            return evidence
+            return list(await web_search(f"{statement} news", max_results=5))
         except Exception as e:
             logger.debug("News check failed: %s", e)
             return []
 
-    async def _check_financial(self, statement: str) -> List[SourceEvidence]:
+    async def _check_financial(self, statement: str) -> List[SearchResult]:
         """Check via web search for market/stock predictions."""
         import re
         tickers = re.findall(r'\$?[A-Z]{1,5}\b', statement.upper())
@@ -246,25 +268,17 @@ class VerificationEngine:
         if not tickers:
             return []
 
-        evidence = []
+        results: List[SearchResult] = []
         for ticker in tickers[:3]:
             try:
-                results = await web_search(f"{ticker} stock price forecast", max_results=2)
-                for r in results:
-                    evidence.append(SourceEvidence(
-                        url=r.url,
-                        title=r.title,
-                        snippet=r.snippet,
-                        supports=self._guess_support(r.snippet, r.title, statement),
-                        relevance=0.7,
-                        credibility=_credibility(r.url),
-                    ))
+                found = await web_search(f"{ticker} stock price forecast", max_results=2)
+                results.extend(found)
             except Exception as e:
                 logger.debug("Financial check failed for %s: %s", ticker, e)
 
-        return evidence
+        return results
 
-    async def _check_github(self, statement: str) -> List[SourceEvidence]:
+    async def _check_github(self, statement: str) -> List[SearchResult]:
         """Check via web search for tech/open-source trend predictions."""
         tech_keywords = ["github", "open source", "repository", "framework", "library",
                          "package", "npm", "pypi", "cargo", "release"]
@@ -272,23 +286,12 @@ class VerificationEngine:
             return []
 
         try:
-            results = await web_search(f"{statement} github repository", max_results=3)
-            evidence = []
-            for r in results:
-                evidence.append(SourceEvidence(
-                    url=r.url,
-                    title=r.title,
-                    snippet=r.snippet,
-                    supports=self._guess_support(r.snippet, r.title, statement),
-                    relevance=0.5,
-                    credibility=_credibility(r.url),
-                ))
-            return evidence
+            return list(await web_search(f"{statement} github repository", max_results=3))
         except Exception as e:
             logger.debug("GitHub check failed: %s", e)
             return []
 
-    async def _check_arxiv(self, statement: str) -> List[SourceEvidence]:
+    async def _check_arxiv(self, statement: str) -> List[SearchResult]:
         """Check via web search for research/tech claims."""
         research_kw = ["study", "research", "paper", "breakthrough", "discovery",
                        "scientist", "researchers", "published", "journal"]
@@ -296,33 +299,9 @@ class VerificationEngine:
             return []
 
         try:
-            results = await web_search(f"{statement} research paper arxiv", max_results=3)
-            evidence = []
-            for r in results:
-                evidence.append(SourceEvidence(
-                    url=r.url,
-                    title=r.title,
-                    snippet=r.snippet,
-                    supports=self._guess_support(r.snippet, r.title, statement),
-                    relevance=0.5,
-                    credibility=_credibility(r.url),
-                ))
-            return evidence
+            return list(await web_search(f"{statement} research paper arxiv", max_results=3))
         except Exception as e:
             logger.debug("arXiv check failed: %s", e)
             return []
-
-    @staticmethod
-    def _guess_support(snippet: str, title: str, statement: str) -> bool:
-        """Simple heuristic: if snippet/title shares keywords with statement, it supports."""
-        stmt_words = set(statement.lower().split()) - {
-            "the", "a", "an", "in", "on", "at", "to", "for", "of", "and",
-            "or", "is", "are", "was", "will", "be", "by", "with", "from",
-        }
-        text = (title + " " + snippet).lower()
-        text_words = set(text.split())
-        overlap = len(stmt_words & text_words)
-        return overlap >= 2
-
 
 __all__ = ["VerificationEngine", "VerificationResult", "SourceEvidence"]

@@ -183,6 +183,14 @@ async def multi_source_grounding(query: str) -> str:
     return "\n\n".join(parts)
 
 
+from oracle.tools.nli import (
+    Entailment,
+    EntailmentJudge,
+    EntailmentJudgment,
+    LLMEntailmentJudge,
+    quote_in_evidence,
+)
+
 __all__ = [
     "SearchResult",
     "WebContext",
@@ -191,4 +199,9 @@ __all__ = [
     "research_topic",
     "format_context_for_prompt",
     "multi_source_grounding",
+    "Entailment",
+    "EntailmentJudge",
+    "EntailmentJudgment",
+    "LLMEntailmentJudge",
+    "quote_in_evidence",
 ]

@@ -110,6 +110,8 @@ class EvidenceItem(BaseModel):
     title: str = ""
     snippet: str = ""
     supports: bool = False  # True=supporting, False=contradicting
+    stance: str = "neutral"  # supports | contradicts | neutral (from NLI)
+    quote: str = ""  # exact verbatim span proving support/contradiction
     credibility_score: float = Field(0.5, ge=0.0, le=1.0)
 
 
