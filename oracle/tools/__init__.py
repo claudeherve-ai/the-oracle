@@ -183,6 +183,24 @@ async def multi_source_grounding(query: str) -> str:
     return "\n\n".join(parts)
 
 
+from oracle.tools.nli import (
+    Entailment,
+    EntailmentJudge,
+    EntailmentJudgment,
+    LLMEntailmentJudge,
+    quote_in_evidence,
+)
+from oracle.tools.structured import (
+    ParsedBatch,
+    PredictionBatch,
+    PredictionDraft,
+    Rejection,
+    extract_json_block,
+    parse_prediction_batch,
+    prediction_json_schema,
+    prediction_response_format,
+)
+
 __all__ = [
     "SearchResult",
     "WebContext",
@@ -191,4 +209,17 @@ __all__ = [
     "research_topic",
     "format_context_for_prompt",
     "multi_source_grounding",
+    "Entailment",
+    "EntailmentJudge",
+    "EntailmentJudgment",
+    "LLMEntailmentJudge",
+    "quote_in_evidence",
+    "ParsedBatch",
+    "PredictionBatch",
+    "PredictionDraft",
+    "Rejection",
+    "extract_json_block",
+    "parse_prediction_batch",
+    "prediction_json_schema",
+    "prediction_response_format",
 ]

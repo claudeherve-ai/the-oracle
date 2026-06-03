@@ -7,11 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from oracle.models.prediction import (
     Prediction, Signal, Category, Status,
-    PredictRequest, ResolveRequest, CalibrationReport,
+    PredictRequest, EnsemblePredictRequest, ResolveRequest, CalibrationReport,
 )
 from oracle.storage.repository import PredictionRepository, SignalRepository
 from oracle.prediction.engine import PredictionEngine
+from oracle.prediction.ensemble import EnsembleEngine
 from oracle.calibration.tracker import CalibrationTracker
+from oracle.calibration.metrics import compute_full_report, serialize_full_report
 from oracle.ingestion.sources import ingest_all
 from oracle.signals.extractor import SignalExtractor
 from oracle.api.dependencies import get_llm, get_prediction_repo, get_signal_repo
@@ -41,6 +43,10 @@ async def predict(
     else:
         predictions = await engine.scan(signals, body.max_predictions)
 
+    # E17: never surface a confidence without its historical track record.
+    history = await pred_repo.get_resolved()
+    engine.contextualize(predictions, history)
+
     for p in predictions:
         await pred_repo.create(p)
 
@@ -61,10 +67,55 @@ async def predict_query(
         body.question, signals, max_predictions=body.max_predictions
     )
 
+    # E17: contextualize each confidence with the resolved track record.
+    history = await pred_repo.get_resolved()
+    engine.contextualize(predictions, history)
+
     for p in predictions:
         await pred_repo.create(p)
 
     return {"predictions": [p.model_dump() for p in predictions], "count": len(predictions)}
+
+
+@router.post("/predict/ensemble", status_code=201)
+async def predict_ensemble(
+    body: EnsemblePredictRequest,
+    pred_repo: PredictionRepository = Depends(get_prediction_repo),
+    signal_repo: SignalRepository = Depends(get_signal_repo),
+):
+    """Generate ensemble predictions across N prompt variants / models.
+
+    Disagreement between runs is surfaced as a first-class uncertainty signal:
+    "4 of 5 runs agreed" is far more trustworthy than a single confident
+    sample. Callers should treat a high ``disagreement_score`` as a reason to
+    distrust the point estimate.
+    """
+    llm = get_llm()
+    ensemble = EnsembleEngine(llm, prompt_variants=body.prompt_variants or None)
+    signals = await signal_repo.list_recent(limit=50)
+
+    result = await ensemble.generate(
+        signals,
+        question=body.question,
+        categories=body.categories,
+        max_predictions=body.max_predictions,
+    )
+
+    # E17: contextualize each ensemble prediction with the resolved track record.
+    history = await pred_repo.get_resolved()
+    PredictionEngine(llm).contextualize(result.predictions, history)
+
+    for p in result.predictions:
+        await pred_repo.create(p)
+
+    return {
+        "predictions": [p.model_dump() for p in result.predictions],
+        "count": len(result.predictions),
+        "disagreement_score": result.disagreement_score,
+        "models_used": result.models_used,
+        "variants_used": result.variants_used,
+        "model_details": result.model_details,
+    }
 
 
 # ── Predictions ──────────────────────────────────────────────
@@ -121,8 +172,26 @@ async def calibration(
     tracker = CalibrationTracker()
     resolved = await pred_repo.get_resolved()
     cat = Category(category) if category else None
-    report = tracker.compute(resolved, category=cat)
+    report = tracker.compute(resolved, category_filter=cat)
     return report.model_dump()
+
+
+@router.get("/calibration/advanced")
+async def calibration_advanced(
+    category: Optional[str] = Query(None),
+    pred_repo: PredictionRepository = Depends(get_prediction_repo),
+):
+    """Get the advanced calibration report (E15).
+
+    Exposes the full reliability picture the math already computes — Brier
+    score, the reliability curve with ECE/MCE, the Murphy refinement/calibration
+    decomposition, confidence coverage, and per-category accuracy — so users can
+    audit the track record instead of taking a bare confidence number on faith.
+    """
+    resolved = await pred_repo.get_resolved()
+    cat = Category(category) if category else None
+    report = compute_full_report(resolved, category=cat)
+    return serialize_full_report(report)
 
 
 # ── Signals ──────────────────────────────────────────────────

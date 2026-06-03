@@ -4,10 +4,6 @@ Delegates to IngestionPipeline for full automated ingestion from
 news, financial, social media, GitHub, and arXiv.
 
 Also retains the legacy direct-source ingestors for backward compatibility.
-
-CITATION: Boil the Ocean upgrade — orchestrates IngestionPipeline.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/oracle/ingestion/pipeline.py
 """
 
 from __future__ import annotations

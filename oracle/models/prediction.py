@@ -1,14 +1,12 @@
 """Prediction models for The Oracle.
 
-CITATION: Extended with EnsemblePrediction, confidence intervals, CalibrationCurve,
-and advanced calibration metrics for the Boil the Ocean upgrade.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/oracle/prediction/ensemble.py
+Pydantic models shared across the engine: predictions, evidence, ensemble
+votes, resolution results, and verification reports.
 """
 
 from enum import Enum
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import uuid
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,6 +26,12 @@ class Status(str, Enum):
     CORRECT = "correct"
     INCORRECT = "incorrect"
     EXPIRED = "expired"
+    #: The system explicitly declined to stand behind this prediction because
+    #: the available evidence was insufficient, contradictory, or could not be
+    #: corroborated. An abstention — NOT a forecast. It is deliberately excluded
+    #: from every calibration denominator (a refusal is neither right nor wrong),
+    #: which is what lets the system honestly say "I don't know."
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
 class Prediction(BaseModel):
@@ -61,6 +65,21 @@ class Prediction(BaseModel):
         default_factory=list,
         description="Models that contributed to this prediction"
     )
+    #: Contextualized track record for this prediction's confidence + category,
+    #: computed from resolved history. Lets the UI show "70% confident — this
+    #: category has been right 68% of the time across 142 resolved predictions
+    #: at this confidence level" instead of a bare, unaudited number. ``None``
+    #: until :meth:`oracle.prediction.engine.PredictionEngine.contextualize`
+    #: (or the API) populates it. See ``oracle.calibration.tracker.TrackRecord``.
+    track_record: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Historical accuracy context for this confidence/category",
+    )
+
+    @property
+    def is_abstention(self) -> bool:
+        """True when the system declined to forecast (insufficient evidence)."""
+        return self.status == Status.INSUFFICIENT_EVIDENCE
 
 
 class Signal(BaseModel):
@@ -112,6 +131,8 @@ class EvidenceItem(BaseModel):
     title: str = ""
     snippet: str = ""
     supports: bool = False  # True=supporting, False=contradicting
+    stance: str = "neutral"  # supports | contradicts | neutral (from NLI)
+    quote: str = ""  # exact verbatim span proving support/contradiction
     credibility_score: float = Field(0.5, ge=0.0, le=1.0)
 
 
@@ -138,14 +159,50 @@ class VerificationReport(BaseModel):
 # ── Resolution models ───────────────────────────────────────────
 
 
+class EvidenceSnapshot(BaseModel):
+    """A point-in-time capture of one source used to resolve a prediction.
+
+    This is what makes a resolution *auditable months later*: it records not
+    just the URL but the exact text that was read, a tamper-evident hash of that
+    text, the verbatim ``quote`` the judge stood on, and the surrounding
+    context. Markets, repos, and news pages mutate or vanish — the snapshot is
+    the frozen evidence the label was actually derived from.
+    """
+
+    url: str
+    canonical_url: str = ""  # normalized URL used for de-duplication
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    fetch_ok: bool = True
+    fetch_error: str = ""
+    stance: str = "neutral"  # supports | contradicts | neutral (verified NLI verdict)
+    quote: str = ""  # exact verbatim span the judge relied on (verified in-text)
+    snippet: str = ""  # surrounding context window around the quote
+    content_hash: str = ""  # sha256 of the fetched text (tamper-evidence)
+    content_chars: int = 0
+    content_truncated: bool = False
+
+
 class ResolutionResult(BaseModel):
-    """Result of auto-resolving a single prediction."""
+    """Result of auto-resolving a single prediction.
+
+    Carries the full audit trail: the exact normalized claim that was judged,
+    a machine-readable ``resolution_reason`` code, and the evidence snapshots
+    the label was derived from. ``new_status`` may be INSUFFICIENT_EVIDENCE — an
+    honest abstention that is excluded from calibration rather than a guess.
+    """
     prediction_id: str
     statement: str
     previous_status: str
     new_status: Status
     resolution: str = ""
+    resolution_claim: str = ""  # the deadline-baked claim actually judged
+    resolution_reason: str = ""  # audit code: resolved | all_neutral | etc.
+    confidence: str = "low"  # low | medium | high
+    reasoning: str = ""
     evidence_urls: List[str] = Field(default_factory=list)
+    evidence_snapshots: List[EvidenceSnapshot] = Field(default_factory=list)
+    requires_human_review: bool = False
+    schema_version: int = 1
     resolved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

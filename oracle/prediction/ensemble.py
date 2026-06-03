@@ -2,10 +2,6 @@
 
 Uses 3+ models with different prompt variants and aggregates by weighted voting.
 Inter-model disagreement serves as an uncertainty signal.
-
-CITATION: Built to replace single-model prediction with ensemble approach.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/
 """
 
 from __future__ import annotations
@@ -336,19 +332,28 @@ class EnsembleEngine:
         name: str,
         variant: str,
     ) -> List[ModelPrediction]:
-        """Run a single provider × variant combination."""
-        # Build variant-specific system prompt
+        """Run a single provider × variant combination.
+
+        The variant guidance is genuinely injected into the prompt via
+        ``extra_context`` so each run actually behaves differently — otherwise
+        the ensemble would produce identical outputs and a meaningless
+        disagreement score of zero. Real differentiation is what makes
+        ``disagreement_score`` a trustworthy uncertainty signal.
+        """
+        # Build variant-specific guidance and inject it for real.
         variant_prompt = PROMPT_VARIANTS.get(variant, PROMPT_VARIANTS["balanced"])
+        variant_context = (
+            f"FORECASTER STANCE ({variant}):\n{variant_prompt.strip()}"
+        )
 
         engine = PredictionEngine(provider)
 
-        # Override system prompt with variant
-        # (PredictionEngine uses _build_system_prompt — we inject variant prefix)
         predictions = await engine.generate(
             signals,
             question=question,
             categories=categories,
             max_predictions=max_predictions,
+            extra_context=variant_context,
         )
 
         return [

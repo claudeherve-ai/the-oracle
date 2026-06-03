@@ -8,23 +8,41 @@ Uses LLMProvider for generation — fully testable with MockProvider.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from oracle.tools import research_topic, format_context_for_prompt, multi_source_grounding
-from oracle.prediction.verify import verify_predictions
+from oracle.tools.structured import ParsedBatch, parse_prediction_batch
 
+from oracle.audit import (
+    AuditRecord,
+    AuditSink,
+    EvidenceSpan,
+    PredictionAudit,
+)
 from oracle.llm import LLMProvider, LLMResponse
+from oracle.calibration.tracker import ConfidenceContextualizer
 from oracle.models.prediction import (
     Category,
     Prediction,
     Signal,
+    Status,
 )
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from oracle.prediction.verifier import SourceEvidence, VerificationEngine, VerificationResult
+
 logger = logging.getLogger("oracle.prediction.engine")
+
+#: Verifier verdicts that, on their own, signal the evidence is too weak or too
+#: conflicted to stand behind a forecast. When the abstain policy is enabled,
+#: any prediction landing on one of these verdicts is converted into an explicit
+#: ``INSUFFICIENT_EVIDENCE`` abstention rather than presented as a confident call.
+_WEAK_VERDICTS = frozenset(
+    {"contradicted", "insufficient_corroboration", "mixed_contradicting", "unverifiable"}
+)
 
 # ---------------------------------------------------------------------------
 # Core prediction engine
@@ -45,8 +63,68 @@ class PredictionEngine:
     # Default prediction timeout: if no deadline specified, use this offset
     DEFAULT_DEADLINE_DAYS = 30
 
-    def __init__(self, llm: LLMProvider):
+    #: Verification modes for ``generate()``.
+    #:   "off"  — no external verification (default; what tests/MockProvider use).
+    #:   "live" — run the canonical multi-source NLI verifier (real network).
+    _VALID_VERIFICATION_MODES = ("off", "live")
+
+    def __init__(
+        self,
+        llm: LLMProvider,
+        *,
+        verifier: "Optional[VerificationEngine]" = None,
+        verification_mode: str = "off",
+        abstain_on_weak_evidence: bool = False,
+        abstain_threshold: float = 0.35,
+        audit_sink: Optional[AuditSink] = None,
+    ):
+        """Create a prediction engine.
+
+        Args:
+            llm: The LLM provider used for generation.
+            verifier: Optional canonical :class:`VerificationEngine`. When
+                ``verification_mode == "live"`` and this is ``None``, one is
+                lazily constructed around ``llm``. Inject a stub in tests.
+            verification_mode: ``"off"`` (default) disables external
+                verification entirely — this is what unit tests and
+                ``MockProvider`` rely on, so no network is ever touched.
+                ``"live"`` enables the canonical multi-source, quote-verified
+                NLI verifier and lets it adjust confidence based on real,
+                corroborated evidence.
+            abstain_on_weak_evidence: When ``True`` (and verification is live),
+                a prediction whose verdict is weak/contradictory, or whose
+                verified confidence falls below ``abstain_threshold``, is
+                converted into an explicit ``INSUFFICIENT_EVIDENCE`` abstention
+                instead of being surfaced as a confident forecast. This is the
+                system's "I don't know" path — a forecaster that refuses bad
+                questions is more trustworthy than one that always answers.
+                Defaults to ``False`` so existing behaviour is unchanged.
+            abstain_threshold: Verified-confidence floor (inclusive lower bound
+                is *not* abstained; strictly below abstains) used by the abstain
+                policy. Ignored unless ``abstain_on_weak_evidence`` is enabled.
+            audit_sink: Optional :class:`~oracle.audit.AuditSink`. When provided,
+                every ``generate()`` call emits a structured
+                :class:`~oracle.audit.AuditRecord` capturing the prompts, model,
+                sources fetched, evidence spans, and confidence *before and
+                after* verification — a replayable, auditable trail.
+                Reproducibility is trust. ``None`` (default) means zero overhead
+                and unchanged behaviour.
+        """
+        if verification_mode not in self._VALID_VERIFICATION_MODES:
+            raise ValueError(
+                f"verification_mode must be one of {self._VALID_VERIFICATION_MODES}, "
+                f"got {verification_mode!r}"
+            )
+        if not 0.0 <= abstain_threshold <= 1.0:
+            raise ValueError(
+                f"abstain_threshold must be in [0.0, 1.0], got {abstain_threshold!r}"
+            )
         self._llm = llm
+        self._verifier = verifier
+        self._verification_mode = verification_mode
+        self._abstain_on_weak_evidence = abstain_on_weak_evidence
+        self._abstain_threshold = abstain_threshold
+        self._audit_sink = audit_sink
 
     # ------------------------------------------------------------------
     # Public API
@@ -126,31 +204,169 @@ class PredictionEngine:
             logger.error(msg)
             raise RuntimeError(msg)
 
-        # Parse and validate
-        predictions = self._parse_predictions(response)
-        predictions = self._validate_predictions(predictions, max_predictions)
+        # Parse and validate through the Pydantic structured-output boundary (A3).
+        parsed = self._parse_predictions(response)
+        predictions = self._validate_predictions(parsed, max_predictions)
 
-        # Verify predictions against web sources
-        if predictions and web_grounding:
-            pred_dicts = [
-                {"statement": p.statement, "confidence": p.confidence,
-                 "category": p.category.value, "deadline": str(p.deadline) if p.deadline else None}
-                for p in predictions
-            ]
-            verification = await verify_predictions(self._llm, pred_dicts, web_grounding)
-            # Apply adjusted confidences
-            verified = verification.get("verified_predictions", [])
-            for i, p in enumerate(predictions):
-                if i < len(verified):
-                    adj = verified[i].get("adjusted_confidence")
-                    if adj is not None:
-                        p.confidence = max(0.1, min(0.99, adj))
-                    note = verified[i].get("verification_note", "")
-                    if note:
-                        p.reasoning = (p.reasoning or "") + f" [Verified: {note}]"
+        # Snapshot pre-verification confidence for the audit trail (D14): we want
+        # to record how much verification *moved* each number, including drops.
+        confidence_pre = [p.confidence for p in predictions]
+
+        # Canonical verification path (A4): the multi-source, quote-verified NLI
+        # verifier is the ONE source of evidence-driven confidence adjustment.
+        # Gated behind verification_mode == "live" so default/test runs touch no
+        # network and behaviour is unchanged unless explicitly enabled.
+        verification_results: List["Optional[VerificationResult]"] = [None] * len(predictions)
+        if predictions and self._verification_mode == "live":
+            verifier = self._get_verifier()
+            results = await verifier.verify(predictions)
+            for idx, (p, r) in enumerate(zip(predictions, results)):
+                verification_results[idx] = r
+                p.confidence = max(0.01, min(0.99, r.adjusted_confidence))
+                if r.summary:
+                    p.reasoning = (p.reasoning or "") + f" [Verified: {r.summary}]"
+                # Abstain path (C10): when the evidence is too weak/conflicted to
+                # stand behind, refuse to forecast rather than emit a confident
+                # number. Opt-in so default behaviour is unchanged.
+                if self._abstain_on_weak_evidence and self._should_abstain(r):
+                    p.status = Status.INSUFFICIENT_EVIDENCE
+                    verdict = getattr(r, "verdict", "unverifiable")
+                    p.reasoning = (p.reasoning or "") + (
+                        f" [Abstained: insufficient evidence — verdict={verdict}, "
+                        f"verified_confidence={p.confidence:.2f} "
+                        f"(threshold={self._abstain_threshold:.2f})]"
+                    )
+
+        # Per-prediction audit record (D14): emitted only when a sink is wired in,
+        # so the default/test path is zero-overhead and behaviourally unchanged.
+        if self._audit_sink is not None:
+            self._emit_audit_record(
+                question=question,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response=response,
+                web_grounding=web_grounding,
+                predictions=predictions,
+                confidence_pre=confidence_pre,
+                verification_results=verification_results,
+            )
 
         logger.info("Generated %d predictions", len(predictions))
         return predictions
+
+    def contextualize(
+        self,
+        predictions: List[Prediction],
+        history: List[Prediction],
+        *,
+        min_samples: int = 5,
+    ) -> List[Prediction]:
+        """Attach a historical track record to each prediction's confidence (E17).
+
+        Never show a number without its track record. Given the resolved
+        ``history`` (audited, scored predictions), this populates each
+        prediction's ``track_record`` with how often the system has actually
+        been right for the same category at the same confidence band — turning a
+        bare ``0.70`` into an auditable "70% confident, and here's the receipts".
+
+        Pure, synchronous, no network. Mutates and returns ``predictions``.
+
+        Args:
+            predictions: Fresh predictions to contextualize (mutated in place).
+            history: Resolved predictions to compute the track record from.
+            min_samples: Minimum resolved samples in a bucket before its accuracy
+                is treated as *proven* rather than provisional.
+        """
+        contextualizer = ConfidenceContextualizer(min_samples=min_samples)
+        return contextualizer.contextualize(predictions, history)
+
+    # ------------------------------------------------------------------
+    # Audit trail (D14)
+    # ------------------------------------------------------------------
+
+    def _emit_audit_record(
+        self,
+        *,
+        question: Optional[str],
+        system_prompt: str,
+        user_prompt: str,
+        response: LLMResponse,
+        web_grounding: str,
+        predictions: List[Prediction],
+        confidence_pre: List[float],
+        verification_results: "List[Optional[VerificationResult]]",
+    ) -> None:
+        """Build and hand a structured :class:`AuditRecord` to the sink.
+
+        Failures here must never break generation — auditing is observability,
+        not a hard dependency of the result — so the whole body is defensive.
+        """
+        try:
+            audited: List[PredictionAudit] = []
+            for idx, pred in enumerate(predictions):
+                pre = confidence_pre[idx] if idx < len(confidence_pre) else pred.confidence
+                result = verification_results[idx] if idx < len(verification_results) else None
+                spans: List[EvidenceSpan] = []
+                verdict: Optional[str] = None
+                if result is not None:
+                    verdict = getattr(result, "verdict", None)
+                    for ev in getattr(result, "evidence", []) or []:
+                        spans.append(
+                            EvidenceSpan(
+                                url=getattr(ev, "url", "") or "",
+                                quote=getattr(ev, "quote", "") or "",
+                                stance=getattr(ev, "stance", "neutral") or "neutral",
+                                credibility=float(getattr(ev, "credibility", 0.5) or 0.5),
+                            )
+                        )
+                audited.append(
+                    PredictionAudit(
+                        prediction_id=getattr(pred, "id", "") or "",
+                        statement=pred.statement,
+                        category=getattr(pred.category, "value", str(pred.category)),
+                        status=getattr(pred.status, "value", str(pred.status)),
+                        confidence_pre=float(pre),
+                        confidence_post=float(pred.confidence),
+                        verdict=verdict,
+                        sources=list(getattr(pred, "sources", []) or []),
+                        evidence_spans=spans,
+                    )
+                )
+
+            record = AuditRecord(
+                model=getattr(self._llm, "model_name", "unknown"),
+                question=question,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                raw_response=response.content,
+                verification_mode=self._verification_mode,
+                grounding_present=bool(web_grounding),
+                grounding_chars=len(web_grounding or ""),
+                predictions=audited,
+            )
+            self._audit_sink.record(record)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Audit record emission failed (non-fatal): %s", exc)
+
+    def _should_abstain(self, result: Any) -> bool:
+        """Decide whether a verified prediction should become an abstention.
+
+        Abstain when the verifier's verdict is itself weak/contradictory, OR
+        when the verified confidence falls strictly below ``abstain_threshold``.
+        """
+        verdict = getattr(result, "verdict", "unverifiable")
+        if verdict in _WEAK_VERDICTS:
+            return True
+        adjusted = max(0.01, min(0.99, result.adjusted_confidence))
+        return adjusted < self._abstain_threshold
+
+    def _get_verifier(self) -> "VerificationEngine":
+        """Return the canonical verifier, lazily building one if needed."""
+        if self._verifier is None:
+            from oracle.prediction.verifier import VerificationEngine
+
+            self._verifier = VerificationEngine(self._llm)
+        return self._verifier
 
     async def generate_from_question(
         self,
@@ -194,46 +410,48 @@ class PredictionEngine:
     # Parsing
     # ------------------------------------------------------------------
 
-    def _parse_predictions(self, response: LLMResponse) -> List[Dict[str, Any]]:
-        """Parse the LLM response into a list of prediction dicts."""
-        content = response.content.strip()
+    def _parse_predictions(self, response: LLMResponse) -> ParsedBatch:
+        """Parse the LLM response into a validated :class:`ParsedBatch`.
 
-        # Extract JSON from response (may be wrapped in markdown)
-        json_str = content
-        if "```" in content:
-            parts = content.split("```")
-            # Find the JSON block
-            for part in parts:
-                part = part.strip()
-                if part.startswith("json"):
-                    json_str = part[4:].strip()
-                    break
-                elif (part.startswith("[") or part.startswith("{")):
-                    json_str = part
-                    break
+        Delegates to the structured-output boundary which validates every
+        candidate against the :class:`PredictionDraft` schema. Items that fail
+        validation are *rejected with a reason* (logged + surfaced on the
+        batch), never silently dropped, and a non-JSON payload yields a
+        ``parse_error`` rather than a confusing empty list.
+        """
+        batch = parse_prediction_batch(response.content)
 
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse LLM response as JSON: %s", content[:200])
-            return []
+        if not batch.ok:
+            logger.warning(
+                "Failed to parse LLM response (%s): %s",
+                batch.parse_error,
+                response.content[:200],
+            )
+        elif batch.rejected:
+            logger.warning(
+                "Rejected %d malformed prediction(s) at the structured boundary: %s",
+                batch.rejection_count,
+                "; ".join(f"[{r.index}] {r.reason}" for r in batch.rejected),
+            )
 
-        if isinstance(data, dict):
-            data = data.get("predictions", [])
-        if not isinstance(data, list):
-            return []
-
-        return data
+        return batch
 
     def _validate_predictions(
         self,
-        raw: List[Dict[str, Any]],
+        batch: ParsedBatch,
         max_predictions: int,
     ) -> List[Prediction]:
-        """Validate and convert raw prediction dicts to Prediction objects."""
+        """Convert validated drafts into domain :class:`Prediction` objects.
+
+        The structured boundary has already enforced the schema, so each draft
+        is fed to ``_make_prediction`` (which still applies domain logic:
+        confidence clamping, category fallback, deadline parsing, source
+        normalisation).
+        """
         predictions: List[Prediction] = []
 
-        for item in raw[:max_predictions]:
+        for draft in batch.valid[:max_predictions]:
+            item = draft.model_dump()
             try:
                 pred = self._make_prediction(item)
                 if pred:
