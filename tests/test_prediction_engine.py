@@ -329,3 +329,108 @@ async def test_max_predictions_enforced():
     )
 
     assert len(result) <= 3
+
+
+# ---------------------------------------------------------------------------
+# Tests — A4 canonical verification wiring (one verification path)
+# ---------------------------------------------------------------------------
+
+class _StubVerifier:
+    """Records whether verify() ran and returns deterministic results."""
+
+    def __init__(self, adjusted: float = 0.42, summary: str = "stub-verified"):
+        self.called = False
+        self.received = None
+        self._adjusted = adjusted
+        self._summary = summary
+
+    async def verify(self, predictions, *, deep_check: bool = False):
+        from oracle.prediction.verifier import VerificationResult
+
+        self.called = True
+        self.received = list(predictions)
+        return [
+            VerificationResult(
+                prediction_id=p.id,
+                statement=p.statement,
+                original_confidence=p.confidence,
+                adjusted_confidence=self._adjusted,
+                summary=self._summary,
+            )
+            for p in predictions
+        ]
+
+
+def test_invalid_verification_mode_raises():
+    """Constructing with an unknown verification mode fails loudly."""
+    with pytest.raises(ValueError):
+        PredictionEngine(MockProvider(), verification_mode="sometimes")
+
+
+@pytest.mark.asyncio
+async def test_verification_off_does_not_call_verifier():
+    """Default mode 'off' must NOT invoke the verifier (zero behaviour change)."""
+    provider = MockProvider()
+    provider.set_response(make_valid_prediction_response(2))
+    stub = _StubVerifier(adjusted=0.42)
+
+    engine = PredictionEngine(provider, verifier=stub)  # mode defaults to 'off'
+    result = await engine.generate([make_signal("test")])
+
+    assert len(result) == 2
+    assert stub.called is False
+    # Confidence untouched by the verifier.
+    assert all(p.confidence != 0.42 for p in result)
+
+
+@pytest.mark.asyncio
+async def test_verification_live_adjusts_confidence():
+    """Mode 'live' routes through the canonical verifier and adjusts confidence."""
+    provider = MockProvider()
+    provider.set_response(make_valid_prediction_response(2))
+    stub = _StubVerifier(adjusted=0.42, summary="2 independent sources support")
+
+    engine = PredictionEngine(provider, verifier=stub, verification_mode="live")
+    result = await engine.generate([make_signal("test")])
+
+    assert len(result) == 2
+    assert stub.called is True
+    for p in result:
+        assert p.confidence == 0.42
+        assert "[Verified: 2 independent sources support]" in p.reasoning
+
+
+@pytest.mark.asyncio
+async def test_verification_live_clamps_confidence():
+    """Verifier output is clamped into the [0.01, 0.99] band."""
+    provider = MockProvider()
+    provider.set_response(make_valid_prediction_response(1))
+    stub = _StubVerifier(adjusted=5.0)  # absurd value must be clamped
+
+    engine = PredictionEngine(provider, verifier=stub, verification_mode="live")
+    result = await engine.generate([make_signal("test")])
+
+    assert len(result) == 1
+    assert result[0].confidence == 0.99
+
+
+@pytest.mark.asyncio
+async def test_self_consistency_check_is_non_evidentiary():
+    """Demoted verify.py never returns confidence or verdict labels."""
+    from oracle.prediction.verify import self_consistency_check
+
+    provider = MockProvider()
+    provider.set_response(json.dumps({
+        "self_consistency_warnings": [
+            {"statement": "X will happen", "self_consistency_warning": "too vague"}
+        ],
+        "summary": "one vague statement",
+    }))
+
+    out = await self_consistency_check(provider, [{"statement": "X will happen"}])
+
+    assert "self_consistency_warnings" in out
+    # Must NOT carry any evidence/calibration fields.
+    assert "adjusted_confidence" not in out
+    assert "verified_predictions" not in out
+    assert "verdict" not in out

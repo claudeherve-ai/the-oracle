@@ -12,10 +12,9 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from oracle.tools import research_topic, format_context_for_prompt, multi_source_grounding
-from oracle.prediction.verify import verify_predictions
 
 from oracle.llm import LLMProvider, LLMResponse
 from oracle.models.prediction import (
@@ -23,6 +22,9 @@ from oracle.models.prediction import (
     Prediction,
     Signal,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from oracle.prediction.verifier import VerificationEngine
 
 logger = logging.getLogger("oracle.prediction.engine")
 
@@ -45,8 +47,40 @@ class PredictionEngine:
     # Default prediction timeout: if no deadline specified, use this offset
     DEFAULT_DEADLINE_DAYS = 30
 
-    def __init__(self, llm: LLMProvider):
+    #: Verification modes for ``generate()``.
+    #:   "off"  — no external verification (default; what tests/MockProvider use).
+    #:   "live" — run the canonical multi-source NLI verifier (real network).
+    _VALID_VERIFICATION_MODES = ("off", "live")
+
+    def __init__(
+        self,
+        llm: LLMProvider,
+        *,
+        verifier: "Optional[VerificationEngine]" = None,
+        verification_mode: str = "off",
+    ):
+        """Create a prediction engine.
+
+        Args:
+            llm: The LLM provider used for generation.
+            verifier: Optional canonical :class:`VerificationEngine`. When
+                ``verification_mode == "live"`` and this is ``None``, one is
+                lazily constructed around ``llm``. Inject a stub in tests.
+            verification_mode: ``"off"`` (default) disables external
+                verification entirely — this is what unit tests and
+                ``MockProvider`` rely on, so no network is ever touched.
+                ``"live"`` enables the canonical multi-source, quote-verified
+                NLI verifier and lets it adjust confidence based on real,
+                corroborated evidence.
+        """
+        if verification_mode not in self._VALID_VERIFICATION_MODES:
+            raise ValueError(
+                f"verification_mode must be one of {self._VALID_VERIFICATION_MODES}, "
+                f"got {verification_mode!r}"
+            )
         self._llm = llm
+        self._verifier = verifier
+        self._verification_mode = verification_mode
 
     # ------------------------------------------------------------------
     # Public API
@@ -130,27 +164,28 @@ class PredictionEngine:
         predictions = self._parse_predictions(response)
         predictions = self._validate_predictions(predictions, max_predictions)
 
-        # Verify predictions against web sources
-        if predictions and web_grounding:
-            pred_dicts = [
-                {"statement": p.statement, "confidence": p.confidence,
-                 "category": p.category.value, "deadline": str(p.deadline) if p.deadline else None}
-                for p in predictions
-            ]
-            verification = await verify_predictions(self._llm, pred_dicts, web_grounding)
-            # Apply adjusted confidences
-            verified = verification.get("verified_predictions", [])
-            for i, p in enumerate(predictions):
-                if i < len(verified):
-                    adj = verified[i].get("adjusted_confidence")
-                    if adj is not None:
-                        p.confidence = max(0.1, min(0.99, adj))
-                    note = verified[i].get("verification_note", "")
-                    if note:
-                        p.reasoning = (p.reasoning or "") + f" [Verified: {note}]"
+        # Canonical verification path (A4): the multi-source, quote-verified NLI
+        # verifier is the ONE source of evidence-driven confidence adjustment.
+        # Gated behind verification_mode == "live" so default/test runs touch no
+        # network and behaviour is unchanged unless explicitly enabled.
+        if predictions and self._verification_mode == "live":
+            verifier = self._get_verifier()
+            results = await verifier.verify(predictions)
+            for p, r in zip(predictions, results):
+                p.confidence = max(0.01, min(0.99, r.adjusted_confidence))
+                if r.summary:
+                    p.reasoning = (p.reasoning or "") + f" [Verified: {r.summary}]"
 
         logger.info("Generated %d predictions", len(predictions))
         return predictions
+
+    def _get_verifier(self) -> "VerificationEngine":
+        """Return the canonical verifier, lazily building one if needed."""
+        if self._verifier is None:
+            from oracle.prediction.verifier import VerificationEngine
+
+            self._verifier = VerificationEngine(self._llm)
+        return self._verifier
 
     async def generate_from_question(
         self,
