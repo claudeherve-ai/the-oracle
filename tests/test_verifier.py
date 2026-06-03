@@ -105,3 +105,81 @@ async def test_dedupes_sources_by_url(stub_search):
 
     urls = [e.url for e in result.evidence]
     assert len(urls) == len(set(urls))
+
+
+# --- B6: independent-corroboration + credibility weighting -------------------
+
+_QUOTE = "OpenAI released a new model in 2025"
+_SNIPPET = "OpenAI released a new model in 2025 to broad availability."
+
+
+def _stub_sources(monkeypatch, sources):
+    """Make every web-backed checker return the given SearchResults."""
+
+    async def fake_web_search(query, max_results=5):
+        return list(sources)
+
+    async def fake_research(topic, fetch_depth=2):
+        return WebContext(query=topic, results=list(sources))
+
+    monkeypatch.setattr(verifier_mod, "web_search", fake_web_search)
+    monkeypatch.setattr(verifier_mod, "research_topic", fake_research)
+
+
+@pytest.mark.asyncio
+async def test_single_low_credibility_source_does_not_boost(monkeypatch):
+    """One lone unknown-domain source must NOT move confidence (B6)."""
+    _stub_sources(
+        monkeypatch,
+        [SearchResult(title="Blog post", url="https://randomblog.example/x", snippet=_SNIPPET)],
+    )
+    mock = MockProvider()
+    mock.set_response(_judge_resp("ENTAILS", _QUOTE))
+    engine = VerificationEngine(mock)
+
+    [result] = await engine.verify([_pred()])
+
+    assert result.verdict == "insufficient_corroboration"
+    assert result.adjusted_confidence == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_two_independent_domains_boost(monkeypatch):
+    """Two distinct mid-credibility domains agreeing earns a boost (B6)."""
+    _stub_sources(
+        monkeypatch,
+        [
+            SearchResult(title="TC", url="https://techcrunch.com/a", snippet=_SNIPPET),
+            SearchResult(title="Verge", url="https://theverge.com/b", snippet=_SNIPPET),
+        ],
+    )
+    mock = MockProvider()
+    mock.set_response(_judge_resp("ENTAILS", _QUOTE))
+    engine = VerificationEngine(mock)
+
+    [result] = await engine.verify([_pred()])
+
+    assert result.verdict == "supported"
+    assert result.adjusted_confidence > 0.7
+    assert len({e.url for e in result.evidence}) == 2
+
+
+@pytest.mark.asyncio
+async def test_two_same_domain_echoes_do_not_boost(monkeypatch):
+    """Two articles from the SAME domain are not independent corroboration (B6)."""
+    _stub_sources(
+        monkeypatch,
+        [
+            SearchResult(title="A", url="https://randomblog.example/a", snippet=_SNIPPET),
+            SearchResult(title="B", url="https://randomblog.example/b", snippet=_SNIPPET),
+        ],
+    )
+    mock = MockProvider()
+    mock.set_response(_judge_resp("ENTAILS", _QUOTE))
+    engine = VerificationEngine(mock)
+
+    [result] = await engine.verify([_pred()])
+
+    assert result.verdict == "insufficient_corroboration"
+    assert result.adjusted_confidence == pytest.approx(0.7)
+

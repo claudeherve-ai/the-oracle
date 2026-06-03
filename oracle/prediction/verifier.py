@@ -62,15 +62,45 @@ HIGH_CREDIBILITY_DOMAINS = {
     "arstechnica.com": 0.75, "wired.com": 0.70,
 }
 
-def _credibility(url: str) -> float:
-    """Estimate source credibility from domain."""
+# A source must clear this bar to move confidence on its own (with a quote).
+HIGH_CRED_THRESHOLD = 0.8
+
+
+def _domain(url: str) -> str:
+    """Registrable-ish domain for a URL (netloc minus a leading www.)."""
     from urllib.parse import urlparse
     try:
-        domain = urlparse(url).netloc.lower()
-        domain = domain.replace("www.", "")
-        return HIGH_CREDIBILITY_DOMAINS.get(domain, 0.4)
+        return urlparse(url).netloc.lower().replace("www.", "")
+    except Exception:
+        return ""
+
+
+def _credibility(url: str) -> float:
+    """Estimate source credibility from domain."""
+    try:
+        return HIGH_CREDIBILITY_DOMAINS.get(_domain(url), 0.4)
     except Exception:
         return 0.3
+
+
+def _independent_domains(evidence: List["SourceEvidence"]) -> set[str]:
+    """Distinct domains backing a set of evidence (independence proxy)."""
+    return {_domain(e.url) for e in evidence if e.url}
+
+
+def _qualifies(evidence: List["SourceEvidence"]) -> bool:
+    """Whether evidence is strong enough to move confidence.
+
+    The B6 corroboration rule: confidence only moves when at least two
+    *independent* domains agree, OR a single high-credibility source backs
+    the claim with a verbatim, quote-verified span. One anonymous blog —
+    or two articles syndicated from the same outlet — never moves the needle.
+    """
+    if not evidence:
+        return False
+    if len(_independent_domains(evidence)) >= 2:
+        return True
+    return any(e.credibility >= HIGH_CRED_THRESHOLD and e.quote for e in evidence)
 
 
 # ---------------------------------------------------------------------------
@@ -157,38 +187,57 @@ class VerificationEngine:
         contradicting = [e for e in all_evidence if e.stance == "contradicts"]
         decisive = supporting + contradicting
 
+        # Credibility-weighted strength + independent-corroboration gating (B6).
+        w_supp = sum(e.credibility for e in supporting)
+        w_contra = sum(e.credibility for e in contradicting)
+        supp_ok = _qualifies(supporting)
+        contra_ok = _qualifies(contradicting)
+
         if not decisive:
             verdict = "unverifiable"
             adjusted_conf = pred.confidence
-        elif len(contradicting) > len(supporting) * 2:
-            verdict = "contradicted"
-            adjusted_conf = max(0.01, pred.confidence - 0.25)
-        elif len(supporting) > len(contradicting) * 3:
-            verdict = "supported"
-            total_cred = sum(e.credibility for e in supporting)
-            boost = min(0.15, total_cred / max(len(supporting), 1) * 0.15)
+        elif contra_ok and w_contra >= w_supp:
+            # Independently corroborated contradiction dominates -> lower confidence.
+            n_domains = len(_independent_domains(contradicting))
+            penalty = min(0.4, 0.15 + 0.1 * n_domains)
+            if supporting:
+                verdict = "mixed_contradicting"
+                penalty = min(penalty, 0.2)
+            else:
+                verdict = "contradicted"
+            adjusted_conf = max(0.01, pred.confidence - penalty)
+        elif supp_ok and w_supp > w_contra:
+            avg_cred = w_supp / max(len(supporting), 1)
+            if contradicting:
+                # Some (weaker/uncorroborated) contradiction exists -> temper the boost.
+                verdict = "mixed_supporting"
+                boost = min(0.08, avg_cred * 0.08)
+            else:
+                verdict = "supported"
+                boost = min(0.15, avg_cred * 0.15)
             adjusted_conf = min(0.99, pred.confidence + boost)
-        elif len(supporting) > len(contradicting):
-            verdict = "mixed_supporting"
-            adjusted_conf = pred.confidence
         else:
-            verdict = "mixed"
-            adjusted_conf = max(0.01, pred.confidence - 0.1)
+            # Decisive stances exist but fail the independent-corroboration bar:
+            # a lone low-credibility source, or same-domain echoes. Hold confidence.
+            verdict = "insufficient_corroboration"
+            adjusted_conf = pred.confidence
 
-        # Confidence interval: tighter with more decisive evidence.
-        decisive_count = len(decisive)
-        if decisive_count > 5:
+        # Confidence interval: tighter with more *independent* decisive evidence.
+        decisive_domains = len(_independent_domains(decisive))
+        if decisive_domains > 5:
             ci_half = 0.05
-        elif decisive_count > 2:
+        elif decisive_domains > 2:
             ci_half = 0.08
         else:
             ci_half = 0.12
 
         summary_parts = []
         if supporting:
-            summary_parts.append(f"{len(supporting)} sources entail (quoted)")
+            n = len(_independent_domains(supporting))
+            summary_parts.append(f"{len(supporting)} sources entail across {n} domains (quoted)")
         if contradicting:
-            summary_parts.append(f"{len(contradicting)} sources contradict (quoted)")
+            n = len(_independent_domains(contradicting))
+            summary_parts.append(f"{len(contradicting)} sources contradict across {n} domains (quoted)")
         if not summary_parts:
             summary_parts.append("No quote-verified evidence found")
 
