@@ -7,10 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from oracle.models.prediction import (
     Prediction, Signal, Category, Status,
-    PredictRequest, ResolveRequest, CalibrationReport,
+    PredictRequest, EnsemblePredictRequest, ResolveRequest, CalibrationReport,
 )
 from oracle.storage.repository import PredictionRepository, SignalRepository
 from oracle.prediction.engine import PredictionEngine
+from oracle.prediction.ensemble import EnsembleEngine
 from oracle.calibration.tracker import CalibrationTracker
 from oracle.ingestion.sources import ingest_all
 from oracle.signals.extractor import SignalExtractor
@@ -65,6 +66,43 @@ async def predict_query(
         await pred_repo.create(p)
 
     return {"predictions": [p.model_dump() for p in predictions], "count": len(predictions)}
+
+
+@router.post("/predict/ensemble", status_code=201)
+async def predict_ensemble(
+    body: EnsemblePredictRequest,
+    pred_repo: PredictionRepository = Depends(get_prediction_repo),
+    signal_repo: SignalRepository = Depends(get_signal_repo),
+):
+    """Generate ensemble predictions across N prompt variants / models.
+
+    Disagreement between runs is surfaced as a first-class uncertainty signal:
+    "4 of 5 runs agreed" is far more trustworthy than a single confident
+    sample. Callers should treat a high ``disagreement_score`` as a reason to
+    distrust the point estimate.
+    """
+    llm = get_llm()
+    ensemble = EnsembleEngine(llm, prompt_variants=body.prompt_variants or None)
+    signals = await signal_repo.list_recent(limit=50)
+
+    result = await ensemble.generate(
+        signals,
+        question=body.question,
+        categories=body.categories,
+        max_predictions=body.max_predictions,
+    )
+
+    for p in result.predictions:
+        await pred_repo.create(p)
+
+    return {
+        "predictions": [p.model_dump() for p in result.predictions],
+        "count": len(result.predictions),
+        "disagreement_score": result.disagreement_score,
+        "models_used": result.models_used,
+        "variants_used": result.variants_used,
+        "model_details": result.model_details,
+    }
 
 
 # ── Predictions ──────────────────────────────────────────────
