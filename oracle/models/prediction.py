@@ -26,6 +26,12 @@ class Status(str, Enum):
     CORRECT = "correct"
     INCORRECT = "incorrect"
     EXPIRED = "expired"
+    #: The system explicitly declined to stand behind this prediction because
+    #: the available evidence was insufficient, contradictory, or could not be
+    #: corroborated. An abstention — NOT a forecast. It is deliberately excluded
+    #: from every calibration denominator (a refusal is neither right nor wrong),
+    #: which is what lets the system honestly say "I don't know."
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
 class Prediction(BaseModel):
@@ -59,6 +65,11 @@ class Prediction(BaseModel):
         default_factory=list,
         description="Models that contributed to this prediction"
     )
+
+    @property
+    def is_abstention(self) -> bool:
+        """True when the system declined to forecast (insufficient evidence)."""
+        return self.status == Status.INSUFFICIENT_EVIDENCE
 
 
 class Signal(BaseModel):

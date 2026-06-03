@@ -338,11 +338,17 @@ async def test_max_predictions_enforced():
 class _StubVerifier:
     """Records whether verify() ran and returns deterministic results."""
 
-    def __init__(self, adjusted: float = 0.42, summary: str = "stub-verified"):
+    def __init__(
+        self,
+        adjusted: float = 0.42,
+        summary: str = "stub-verified",
+        verdict: str = "unverifiable",
+    ):
         self.called = False
         self.received = None
         self._adjusted = adjusted
         self._summary = summary
+        self._verdict = verdict
 
     async def verify(self, predictions, *, deep_check: bool = False):
         from oracle.prediction.verifier import VerificationResult
@@ -356,6 +362,7 @@ class _StubVerifier:
                 original_confidence=p.confidence,
                 adjusted_confidence=self._adjusted,
                 summary=self._summary,
+                verdict=self._verdict,
             )
             for p in predictions
         ]
@@ -583,3 +590,118 @@ async def test_engine_rejects_invalid_predictions_at_boundary():
     # Only the valid prediction survives the boundary.
     assert len(result) == 1
     assert result[0].statement.startswith("A genuinely valid")
+
+
+# ---------------------------------------------------------------------------
+# C10 — INSUFFICIENT_EVIDENCE / abstain path (#10)
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_abstain_threshold_raises():
+    """A threshold outside [0, 1] fails loudly at construction time."""
+    with pytest.raises(ValueError):
+        PredictionEngine(MockProvider(), abstain_threshold=1.5)
+    with pytest.raises(ValueError):
+        PredictionEngine(MockProvider(), abstain_threshold=-0.1)
+
+
+@pytest.mark.asyncio
+async def test_abstain_off_by_default_keeps_pending_on_weak_verdict():
+    """With the flag off (default), a weak verdict must NOT abstain."""
+    provider = MockProvider()
+    provider.set_response(make_valid_prediction_response(1))
+    # Default stub verdict is the weak "unverifiable".
+    stub = _StubVerifier(adjusted=0.9, verdict="unverifiable")
+
+    engine = PredictionEngine(provider, verifier=stub, verification_mode="live")
+    result = await engine.generate([make_signal("test")])
+
+    assert len(result) == 1
+    assert result[0].status == Status.PENDING
+    assert not result[0].is_abstention
+
+
+@pytest.mark.asyncio
+async def test_abstain_on_weak_verdict():
+    """Flag on + weak verdict → status flips to INSUFFICIENT_EVIDENCE."""
+    provider = MockProvider()
+    provider.set_response(make_valid_prediction_response(1))
+    # High confidence but a weak verdict: the verdict alone forces abstention.
+    stub = _StubVerifier(adjusted=0.9, verdict="contradicted")
+
+    engine = PredictionEngine(
+        provider,
+        verifier=stub,
+        verification_mode="live",
+        abstain_on_weak_evidence=True,
+    )
+    result = await engine.generate([make_signal("test")])
+
+    assert len(result) == 1
+    pred = result[0]
+    assert pred.status == Status.INSUFFICIENT_EVIDENCE
+    assert pred.is_abstention
+    assert "[Abstained:" in pred.reasoning
+
+
+@pytest.mark.asyncio
+async def test_abstain_on_low_confidence_below_threshold():
+    """Flag on + verified confidence below threshold → abstain."""
+    provider = MockProvider()
+    provider.set_response(make_valid_prediction_response(1))
+    # A "supported" verdict but confidence under the threshold.
+    stub = _StubVerifier(adjusted=0.2, verdict="supported")
+
+    engine = PredictionEngine(
+        provider,
+        verifier=stub,
+        verification_mode="live",
+        abstain_on_weak_evidence=True,
+        abstain_threshold=0.35,
+    )
+    result = await engine.generate([make_signal("test")])
+
+    assert len(result) == 1
+    assert result[0].status == Status.INSUFFICIENT_EVIDENCE
+    assert result[0].is_abstention
+
+
+@pytest.mark.asyncio
+async def test_no_abstain_on_strong_verdict_and_high_confidence():
+    """Flag on + strong verdict + high confidence → stays PENDING."""
+    provider = MockProvider()
+    provider.set_response(make_valid_prediction_response(1))
+    stub = _StubVerifier(adjusted=0.85, verdict="supported")
+
+    engine = PredictionEngine(
+        provider,
+        verifier=stub,
+        verification_mode="live",
+        abstain_on_weak_evidence=True,
+        abstain_threshold=0.35,
+    )
+    result = await engine.generate([make_signal("test")])
+
+    assert len(result) == 1
+    assert result[0].status == Status.PENDING
+    assert not result[0].is_abstention
+
+
+@pytest.mark.asyncio
+async def test_abstain_never_triggers_when_verification_off():
+    """Abstention requires a verification pass; 'off' mode never abstains."""
+    provider = MockProvider()
+    provider.set_response(make_valid_prediction_response(2))
+    stub = _StubVerifier(adjusted=0.1, verdict="contradicted")
+
+    # Flag is on, but verification_mode defaults to 'off' → verifier never runs.
+    engine = PredictionEngine(
+        provider,
+        verifier=stub,
+        abstain_on_weak_evidence=True,
+    )
+    result = await engine.generate([make_signal("test")])
+
+    assert stub.called is False
+    assert all(p.status == Status.PENDING for p in result)
+    assert all(not p.is_abstention for p in result)

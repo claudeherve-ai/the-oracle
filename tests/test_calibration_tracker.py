@@ -98,9 +98,25 @@ def test_compute_ignores_pending():
     assert report.overall_accuracy == 0.5
 
 
-# ---------------------------------------------------------------------------
-# Tests — buckets
-# ---------------------------------------------------------------------------
+def test_compute_ignores_abstentions():
+    """INSUFFICIENT_EVIDENCE abstentions are excluded from calibration.
+
+    A refusal to forecast is neither right nor wrong, so it must never enter
+    a calibration denominator — otherwise the system could game its own
+    accuracy by abstaining on hard questions.
+    """
+    tracker = CalibrationTracker()
+    preds = [
+        make_prediction(status=Status.CORRECT),
+        make_prediction(status=Status.INCORRECT),
+        make_prediction(status=Status.INSUFFICIENT_EVIDENCE),  # excluded
+        make_prediction(status=Status.INSUFFICIENT_EVIDENCE),  # excluded
+    ]
+    report = tracker.compute(preds)
+
+    assert report.overall_total == 2
+    assert report.overall_correct == 1
+    assert report.overall_accuracy == 0.5
 
 def test_compute_buckets():
     """Predictions are grouped into confidence buckets per category."""

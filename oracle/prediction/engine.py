@@ -21,12 +21,21 @@ from oracle.models.prediction import (
     Category,
     Prediction,
     Signal,
+    Status,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from oracle.prediction.verifier import VerificationEngine
 
 logger = logging.getLogger("oracle.prediction.engine")
+
+#: Verifier verdicts that, on their own, signal the evidence is too weak or too
+#: conflicted to stand behind a forecast. When the abstain policy is enabled,
+#: any prediction landing on one of these verdicts is converted into an explicit
+#: ``INSUFFICIENT_EVIDENCE`` abstention rather than presented as a confident call.
+_WEAK_VERDICTS = frozenset(
+    {"contradicted", "insufficient_corroboration", "mixed_contradicting", "unverifiable"}
+)
 
 # ---------------------------------------------------------------------------
 # Core prediction engine
@@ -58,6 +67,8 @@ class PredictionEngine:
         *,
         verifier: "Optional[VerificationEngine]" = None,
         verification_mode: str = "off",
+        abstain_on_weak_evidence: bool = False,
+        abstain_threshold: float = 0.35,
     ):
         """Create a prediction engine.
 
@@ -72,15 +83,32 @@ class PredictionEngine:
                 ``"live"`` enables the canonical multi-source, quote-verified
                 NLI verifier and lets it adjust confidence based on real,
                 corroborated evidence.
+            abstain_on_weak_evidence: When ``True`` (and verification is live),
+                a prediction whose verdict is weak/contradictory, or whose
+                verified confidence falls below ``abstain_threshold``, is
+                converted into an explicit ``INSUFFICIENT_EVIDENCE`` abstention
+                instead of being surfaced as a confident forecast. This is the
+                system's "I don't know" path — a forecaster that refuses bad
+                questions is more trustworthy than one that always answers.
+                Defaults to ``False`` so existing behaviour is unchanged.
+            abstain_threshold: Verified-confidence floor (inclusive lower bound
+                is *not* abstained; strictly below abstains) used by the abstain
+                policy. Ignored unless ``abstain_on_weak_evidence`` is enabled.
         """
         if verification_mode not in self._VALID_VERIFICATION_MODES:
             raise ValueError(
                 f"verification_mode must be one of {self._VALID_VERIFICATION_MODES}, "
                 f"got {verification_mode!r}"
             )
+        if not 0.0 <= abstain_threshold <= 1.0:
+            raise ValueError(
+                f"abstain_threshold must be in [0.0, 1.0], got {abstain_threshold!r}"
+            )
         self._llm = llm
         self._verifier = verifier
         self._verification_mode = verification_mode
+        self._abstain_on_weak_evidence = abstain_on_weak_evidence
+        self._abstain_threshold = abstain_threshold
 
     # ------------------------------------------------------------------
     # Public API
@@ -175,9 +203,32 @@ class PredictionEngine:
                 p.confidence = max(0.01, min(0.99, r.adjusted_confidence))
                 if r.summary:
                     p.reasoning = (p.reasoning or "") + f" [Verified: {r.summary}]"
+                # Abstain path (C10): when the evidence is too weak/conflicted to
+                # stand behind, refuse to forecast rather than emit a confident
+                # number. Opt-in so default behaviour is unchanged.
+                if self._abstain_on_weak_evidence and self._should_abstain(r):
+                    p.status = Status.INSUFFICIENT_EVIDENCE
+                    verdict = getattr(r, "verdict", "unverifiable")
+                    p.reasoning = (p.reasoning or "") + (
+                        f" [Abstained: insufficient evidence — verdict={verdict}, "
+                        f"verified_confidence={p.confidence:.2f} "
+                        f"(threshold={self._abstain_threshold:.2f})]"
+                    )
 
         logger.info("Generated %d predictions", len(predictions))
         return predictions
+
+    def _should_abstain(self, result: Any) -> bool:
+        """Decide whether a verified prediction should become an abstention.
+
+        Abstain when the verifier's verdict is itself weak/contradictory, OR
+        when the verified confidence falls strictly below ``abstain_threshold``.
+        """
+        verdict = getattr(result, "verdict", "unverifiable")
+        if verdict in _WEAK_VERDICTS:
+            return True
+        adjusted = max(0.01, min(0.99, result.adjusted_confidence))
+        return adjusted < self._abstain_threshold
 
     def _get_verifier(self) -> "VerificationEngine":
         """Return the canonical verifier, lazily building one if needed."""
