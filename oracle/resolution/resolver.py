@@ -1,11 +1,8 @@
 """Resolution Engine — auto-resolve predictions against real-world data.
 
-Scans past-deadline predictions and checks real-world outcomes via web search,
-financial data, and news to auto-resolve as correct/incorrect/expired.
-
-CITATION: Built for automated prediction resolution.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/
+Scans past-deadline predictions and judges real-world outcomes from fetched
+page text, snapshotting the resolving evidence so every call is auditable.
+Ambiguous evidence resolves to INSUFFICIENT_EVIDENCE, not EXPIRED.
 """
 
 from __future__ import annotations

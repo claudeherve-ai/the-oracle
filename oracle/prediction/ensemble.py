@@ -2,10 +2,6 @@
 
 Uses 3+ models with different prompt variants and aggregates by weighted voting.
 Inter-model disagreement serves as an uncertainty signal.
-
-CITATION: Built to replace single-model prediction with ensemble approach.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/
 """
 
 from __future__ import annotations

@@ -1,9 +1,7 @@
 """Prediction models for The Oracle.
 
-CITATION: Extended with EnsemblePrediction, confidence intervals, CalibrationCurve,
-and advanced calibration metrics for the Boil the Ocean upgrade.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/oracle/prediction/ensemble.py
+Pydantic models shared across the engine: predictions, evidence, ensemble
+votes, resolution results, and verification reports.
 """
 
 from enum import Enum

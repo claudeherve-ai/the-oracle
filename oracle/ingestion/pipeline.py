@@ -1,10 +1,6 @@
 """Automated ingestion pipeline — news, social, financial, GitHub, arXiv.
 
 Orchestrates multi-source data ingestion and converts to Signal objects.
-
-CITATION: Built for automated The Oracle signal ingestion.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/
 """
 
 from __future__ import annotations

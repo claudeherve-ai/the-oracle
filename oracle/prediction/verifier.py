@@ -1,11 +1,8 @@
-"""Real verification engine — fact-check predictions against actual web sources.
+"""Canonical verification engine — fact-check predictions against real web sources.
 
-Replaces the LLM-theater verification with multi-source, multi-provider
-fact-checking against news, financial data, GitHub, and arXiv.
-
-CITATION: Built to replace LLM-vibe verification with real evidence.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/
+Multi-source, multi-provider fact-checking against news, financial data,
+GitHub, and arXiv, using natural-language-inference entailment with quoted
+evidence spans (see ``oracle.tools.nli``) rather than keyword overlap.
 """
 
 from __future__ import annotations

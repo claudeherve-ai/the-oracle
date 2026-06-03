@@ -71,12 +71,18 @@ class OpenAIProvider:
             import os
             from openai import AsyncAzureOpenAI
 
+            endpoint = self._azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
+            if not endpoint:
+                raise RuntimeError(
+                    "AZURE_OPENAI_ENDPOINT is not configured. Set the "
+                    "AZURE_OPENAI_ENDPOINT environment variable or pass "
+                    "azure_endpoint=... to OpenAIProvider(). No default endpoint "
+                    "is provided so the engine fails loudly rather than calling "
+                    "an unexpected resource."
+                )
             self._client = AsyncAzureOpenAI(
                 api_key=self._api_key or os.getenv("AZURE_OPENAI_API_KEY"),
-                azure_endpoint=self._azure_endpoint or os.getenv(
-                    "AZURE_OPENAI_ENDPOINT",
-                    "https://tedcherve-6038-resource.cognitiveservices.azure.com/"
-                ),
+                azure_endpoint=endpoint,
                 api_version=self._api_version or os.getenv(
                     "AZURE_OPENAI_API_VERSION", "2024-12-01-preview"
                 ),

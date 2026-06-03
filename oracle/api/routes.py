@@ -121,7 +121,7 @@ async def calibration(
     tracker = CalibrationTracker()
     resolved = await pred_repo.get_resolved()
     cat = Category(category) if category else None
-    report = tracker.compute(resolved, category=cat)
+    report = tracker.compute(resolved, category_filter=cat)
     return report.model_dump()
 
 

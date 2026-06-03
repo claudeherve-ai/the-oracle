@@ -1,8 +1,7 @@
 """Advanced calibration metrics — Brier score, calibration curves, decomposition.
 
-CITATION: Built to provide statistically rigorous calibration metrics.
-Session: Hermes Agent, 2026-06-01.
-BACK-LINK: /home/tedch/the-oracle/
+Pure, dependency-free statistics: reliability curve, ECE/MCE, Murphy
+decomposition, and coverage of calibration outcomes.
 """
 
 from __future__ import annotations
