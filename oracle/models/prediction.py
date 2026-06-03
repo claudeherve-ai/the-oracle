@@ -149,14 +149,50 @@ class VerificationReport(BaseModel):
 # ── Resolution models ───────────────────────────────────────────
 
 
+class EvidenceSnapshot(BaseModel):
+    """A point-in-time capture of one source used to resolve a prediction.
+
+    This is what makes a resolution *auditable months later*: it records not
+    just the URL but the exact text that was read, a tamper-evident hash of that
+    text, the verbatim ``quote`` the judge stood on, and the surrounding
+    context. Markets, repos, and news pages mutate or vanish — the snapshot is
+    the frozen evidence the label was actually derived from.
+    """
+
+    url: str
+    canonical_url: str = ""  # normalized URL used for de-duplication
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    fetch_ok: bool = True
+    fetch_error: str = ""
+    stance: str = "neutral"  # supports | contradicts | neutral (verified NLI verdict)
+    quote: str = ""  # exact verbatim span the judge relied on (verified in-text)
+    snippet: str = ""  # surrounding context window around the quote
+    content_hash: str = ""  # sha256 of the fetched text (tamper-evidence)
+    content_chars: int = 0
+    content_truncated: bool = False
+
+
 class ResolutionResult(BaseModel):
-    """Result of auto-resolving a single prediction."""
+    """Result of auto-resolving a single prediction.
+
+    Carries the full audit trail: the exact normalized claim that was judged,
+    a machine-readable ``resolution_reason`` code, and the evidence snapshots
+    the label was derived from. ``new_status`` may be INSUFFICIENT_EVIDENCE — an
+    honest abstention that is excluded from calibration rather than a guess.
+    """
     prediction_id: str
     statement: str
     previous_status: str
     new_status: Status
     resolution: str = ""
+    resolution_claim: str = ""  # the deadline-baked claim actually judged
+    resolution_reason: str = ""  # audit code: resolved | all_neutral | etc.
+    confidence: str = "low"  # low | medium | high
+    reasoning: str = ""
     evidence_urls: List[str] = Field(default_factory=list)
+    evidence_snapshots: List[EvidenceSnapshot] = Field(default_factory=list)
+    requires_human_review: bool = False
+    schema_version: int = 1
     resolved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
