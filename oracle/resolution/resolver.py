@@ -13,9 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from gstack_tools.search import research_topic, web_search, SearchResult
-from gstack_tools.news import fetch_news
-from gstack_tools.financial import get_stock_quote
+from oracle.tools import research_topic, web_search
 
 from oracle.llm import LLMProvider
 from oracle.models.prediction import Prediction, Status
@@ -102,15 +100,15 @@ class ResolutionEngine:
         except Exception as e:
             logger.debug("Web search for resolution failed: %s", e)
 
-        # News check
+        # News-oriented outcome search
         try:
-            articles = await fetch_news(query=statement[:100], max_articles=3)
-            for a in articles:
-                evidence_urls.append(a.url)
+            results = await web_search(f"{statement} outcome result news", max_results=3)
+            for r in results:
+                evidence_urls.append(r.url)
         except Exception:
             pass
 
-        # Financial check
+        # Market-related outcome search
         try:
             import re
             tickers = re.findall(r'\$?[A-Z]{1,5}\b', statement.upper())
@@ -118,9 +116,9 @@ class ResolutionEngine:
                        ("THE", "A", "I", "AT", "IN", "BY", "Q", "IS", "AND", "OR",
                         "BE", "TO", "IT", "WILL", "FOR")]
             for ticker in tickers[:2]:
-                quote = await get_stock_quote(ticker)
-                if quote:
-                    evidence_urls.append(f"https://finance.yahoo.com/quote/{ticker}")
+                results = await web_search(f"{ticker} stock price", max_results=1)
+                for r in results:
+                    evidence_urls.append(r.url)
         except Exception:
             pass
 

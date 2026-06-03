@@ -12,11 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from gstack_tools.search import research_topic, format_context_for_prompt, SearchResult
-from gstack_tools.news import fetch_news, NewsArticle
-from gstack_tools.financial import get_stock_quote, StockQuote
-from gstack_tools.github_trends import search_github, TrendingRepo
-from gstack_tools.arxiv_papers import search_arxiv, ArxivPaper
+from oracle.tools import research_topic, web_search, SearchResult
 
 from oracle.llm import LLMProvider, LLMResponse
 from oracle.models.prediction import Prediction
@@ -221,18 +217,18 @@ class VerificationEngine:
             return []
 
     async def _check_news(self, statement: str) -> List[SourceEvidence]:
-        """Check via news sources."""
+        """Check via a targeted news-oriented web search."""
         try:
-            articles = await fetch_news(query=statement[:100], max_articles=5)
+            results = await web_search(f"{statement} news", max_results=5)
             evidence = []
-            for a in articles:
+            for r in results:
                 ev = SourceEvidence(
-                    url=a.url,
-                    title=a.title,
-                    snippet=a.summary,
-                    supports=self._guess_support(a.summary, a.title, statement),
+                    url=r.url,
+                    title=r.title,
+                    snippet=r.snippet,
+                    supports=self._guess_support(r.snippet, r.title, statement),
                     relevance=0.5,
-                    credibility=_credibility(a.url),
+                    credibility=_credibility(r.url),
                 )
                 evidence.append(ev)
             return evidence
@@ -241,7 +237,7 @@ class VerificationEngine:
             return []
 
     async def _check_financial(self, statement: str) -> List[SourceEvidence]:
-        """Check via financial data for market/stock predictions."""
+        """Check via web search for market/stock predictions."""
         import re
         tickers = re.findall(r'\$?[A-Z]{1,5}\b', statement.upper())
         tickers = [t for t in tickers if t not in ("THE", "A", "I", "AT", "IN", "BY", "Q", "IS",
@@ -253,15 +249,15 @@ class VerificationEngine:
         evidence = []
         for ticker in tickers[:3]:
             try:
-                quote = await get_stock_quote(ticker)
-                if quote:
+                results = await web_search(f"{ticker} stock price forecast", max_results=2)
+                for r in results:
                     evidence.append(SourceEvidence(
-                        url=f"https://finance.yahoo.com/quote/{ticker}",
-                        title=f"{ticker} stock: ${quote.price}",
-                        snippet=f"Price: ${quote.price}, Change: {quote.change_percent}%, Volume: {quote.volume}",
-                        supports=True,  # neutral — just data
+                        url=r.url,
+                        title=r.title,
+                        snippet=r.snippet,
+                        supports=self._guess_support(r.snippet, r.title, statement),
                         relevance=0.7,
-                        credibility=0.85,
+                        credibility=_credibility(r.url),
                     ))
             except Exception as e:
                 logger.debug("Financial check failed for %s: %s", ticker, e)
@@ -269,23 +265,23 @@ class VerificationEngine:
         return evidence
 
     async def _check_github(self, statement: str) -> List[SourceEvidence]:
-        """Check via GitHub for tech trend predictions."""
+        """Check via web search for tech/open-source trend predictions."""
         tech_keywords = ["github", "open source", "repository", "framework", "library",
                          "package", "npm", "pypi", "cargo", "release"]
         if not any(kw in statement.lower() for kw in tech_keywords):
             return []
 
         try:
-            repos = await search_github(statement[:80], limit=3)
+            results = await web_search(f"{statement} github repository", max_results=3)
             evidence = []
-            for repo in repos:
+            for r in results:
                 evidence.append(SourceEvidence(
-                    url=repo.url,
-                    title=f"{repo.name}: {repo.description}",
-                    snippet=f"Stars: {repo.stars}, Language: {repo.language}, Topics: {', '.join(repo.topics[:5])}",
-                    supports=True,
+                    url=r.url,
+                    title=r.title,
+                    snippet=r.snippet,
+                    supports=self._guess_support(r.snippet, r.title, statement),
                     relevance=0.5,
-                    credibility=0.75,
+                    credibility=_credibility(r.url),
                 ))
             return evidence
         except Exception as e:
@@ -293,23 +289,23 @@ class VerificationEngine:
             return []
 
     async def _check_arxiv(self, statement: str) -> List[SourceEvidence]:
-        """Check via arXiv for research/tech claims."""
+        """Check via web search for research/tech claims."""
         research_kw = ["study", "research", "paper", "breakthrough", "discovery",
                        "scientist", "researchers", "published", "journal"]
         if not any(kw in statement.lower() for kw in research_kw):
             return []
 
         try:
-            papers = await search_arxiv(statement[:80], max_results=3)
+            results = await web_search(f"{statement} research paper arxiv", max_results=3)
             evidence = []
-            for paper in papers:
+            for r in results:
                 evidence.append(SourceEvidence(
-                    url=paper.abstract_url,
-                    title=paper.title,
-                    snippet=paper.summary[:200],
-                    supports=True,
+                    url=r.url,
+                    title=r.title,
+                    snippet=r.snippet,
+                    supports=self._guess_support(r.snippet, r.title, statement),
                     relevance=0.5,
-                    credibility=0.85,
+                    credibility=_credibility(r.url),
                 ))
             return evidence
         except Exception as e:
