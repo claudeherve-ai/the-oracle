@@ -434,3 +434,152 @@ async def test_self_consistency_check_is_non_evidentiary():
     assert "adjusted_confidence" not in out
     assert "verified_predictions" not in out
     assert "verdict" not in out
+
+
+# ---------------------------------------------------------------------------
+# A3 — Structured-output validation at the LLM boundary (#3)
+# ---------------------------------------------------------------------------
+
+
+def test_structured_valid_batch_parses():
+    """A well-formed batch validates every item with no rejections."""
+    from oracle.tools.structured import parse_prediction_batch
+
+    payload = make_valid_prediction_response(3)
+    batch = parse_prediction_batch(payload)
+
+    assert batch.ok
+    assert batch.parse_error is None
+    assert len(batch.valid) == 3
+    assert batch.rejection_count == 0
+    # The validated draft exposes the schema fields directly.
+    assert all(d.statement for d in batch.valid)
+    assert all(0.0 <= d.confidence <= 1.0 for d in batch.valid)
+
+
+def test_structured_invalid_item_rejected_not_dropped():
+    """A malformed item is REJECTED WITH A REASON, never silently dropped."""
+    from oracle.tools.structured import parse_prediction_batch
+
+    payload = json.dumps({
+        "predictions": [
+            {  # valid
+                "statement": "Apple will announce an M4 MacBook Pro by June 2026",
+                "category": "product_launch",
+                "confidence": 0.7,
+            },
+            {  # invalid: statement too short (< 10 chars)
+                "statement": "Nope",
+                "category": "tech_trend",
+                "confidence": 0.5,
+            },
+            {  # invalid: confidence out of [0, 1]
+                "statement": "Something big will absolutely happen next quarter",
+                "category": "market_move",
+                "confidence": 7.5,
+            },
+        ]
+    })
+
+    batch = parse_prediction_batch(payload)
+
+    assert batch.ok  # the container itself was valid JSON
+    assert len(batch.valid) == 1
+    assert batch.rejection_count == 2
+    # Rejections preserve which item failed and a human-readable reason.
+    rejected_indices = {r.index for r in batch.rejected}
+    assert rejected_indices == {1, 2}
+    assert all(r.reason for r in batch.rejected)
+    # The original raw item is retained for auditing.
+    assert all(r.raw is not None for r in batch.rejected)
+
+
+def test_structured_malformed_payload_sets_parse_error():
+    """Non-JSON prose yields a parse_error, not a confusing empty success."""
+    from oracle.tools.structured import parse_prediction_batch
+
+    batch = parse_prediction_batch("I don't feel like predicting today.")
+
+    assert not batch.ok
+    assert batch.parse_error is not None
+    assert batch.valid == []
+
+
+def test_structured_non_string_payload_accepted():
+    """Production structured-output mode passes an already-decoded dict."""
+    from oracle.tools.structured import parse_prediction_batch
+
+    batch = parse_prediction_batch({
+        "predictions": [
+            {
+                "statement": "Regulators will publish new AI rules by Q4 2026",
+                "category": "regulatory",
+                "confidence": 0.6,
+            }
+        ]
+    })
+
+    assert batch.ok
+    assert len(batch.valid) == 1
+    assert batch.valid[0].category == "regulatory"
+
+
+def test_structured_sources_coercion():
+    """A comma-joined string of sources is coerced into a clean list."""
+    from oracle.tools.structured import PredictionDraft
+
+    draft = PredictionDraft.model_validate({
+        "statement": "GitHub will surpass 200M repos by end of 2026",
+        "sources": "https://a.example, https://b.example ,",
+    })
+
+    assert draft.sources == ["https://a.example", "https://b.example"]
+
+
+def test_structured_response_format_is_schema_dict():
+    """The production response_format payload is a strict JSON-schema dict."""
+    from oracle.tools.structured import (
+        prediction_json_schema,
+        prediction_response_format,
+    )
+
+    rf = prediction_response_format()
+    assert isinstance(rf, dict)
+    assert rf["type"] == "json_schema"
+    assert rf["json_schema"]["strict"] is True
+    assert isinstance(rf["json_schema"]["schema"], dict)
+
+    schema = prediction_json_schema()
+    assert isinstance(schema, dict)
+    assert "properties" in schema
+
+
+@pytest.mark.asyncio
+async def test_engine_rejects_invalid_predictions_at_boundary():
+    """Engine surfaces only schema-valid predictions; junk is rejected."""
+    provider = MockProvider()
+    provider.set_response(json.dumps({
+        "predictions": [
+            {
+                "statement": "A genuinely valid prediction about the future of tech",
+                "category": "tech_trend",
+                "confidence": 0.6,
+                "deadline": "2026-06-01",
+                "sources": [],
+            },
+            {  # too short — must be rejected, not silently dropped
+                "statement": "bad",
+                "category": "tech_trend",
+                "confidence": 0.6,
+                "deadline": "2026-06-01",
+                "sources": [],
+            },
+        ]
+    }))
+
+    engine = PredictionEngine(provider)
+    result = await engine.generate([make_signal("test")])
+
+    # Only the valid prediction survives the boundary.
+    assert len(result) == 1
+    assert result[0].statement.startswith("A genuinely valid")

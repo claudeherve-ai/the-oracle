@@ -8,13 +8,13 @@ Uses LLMProvider for generation — fully testable with MockProvider.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from oracle.tools import research_topic, format_context_for_prompt, multi_source_grounding
+from oracle.tools.structured import ParsedBatch, parse_prediction_batch
 
 from oracle.llm import LLMProvider, LLMResponse
 from oracle.models.prediction import (
@@ -160,9 +160,9 @@ class PredictionEngine:
             logger.error(msg)
             raise RuntimeError(msg)
 
-        # Parse and validate
-        predictions = self._parse_predictions(response)
-        predictions = self._validate_predictions(predictions, max_predictions)
+        # Parse and validate through the Pydantic structured-output boundary (A3).
+        parsed = self._parse_predictions(response)
+        predictions = self._validate_predictions(parsed, max_predictions)
 
         # Canonical verification path (A4): the multi-source, quote-verified NLI
         # verifier is the ONE source of evidence-driven confidence adjustment.
@@ -229,46 +229,48 @@ class PredictionEngine:
     # Parsing
     # ------------------------------------------------------------------
 
-    def _parse_predictions(self, response: LLMResponse) -> List[Dict[str, Any]]:
-        """Parse the LLM response into a list of prediction dicts."""
-        content = response.content.strip()
+    def _parse_predictions(self, response: LLMResponse) -> ParsedBatch:
+        """Parse the LLM response into a validated :class:`ParsedBatch`.
 
-        # Extract JSON from response (may be wrapped in markdown)
-        json_str = content
-        if "```" in content:
-            parts = content.split("```")
-            # Find the JSON block
-            for part in parts:
-                part = part.strip()
-                if part.startswith("json"):
-                    json_str = part[4:].strip()
-                    break
-                elif (part.startswith("[") or part.startswith("{")):
-                    json_str = part
-                    break
+        Delegates to the structured-output boundary which validates every
+        candidate against the :class:`PredictionDraft` schema. Items that fail
+        validation are *rejected with a reason* (logged + surfaced on the
+        batch), never silently dropped, and a non-JSON payload yields a
+        ``parse_error`` rather than a confusing empty list.
+        """
+        batch = parse_prediction_batch(response.content)
 
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse LLM response as JSON: %s", content[:200])
-            return []
+        if not batch.ok:
+            logger.warning(
+                "Failed to parse LLM response (%s): %s",
+                batch.parse_error,
+                response.content[:200],
+            )
+        elif batch.rejected:
+            logger.warning(
+                "Rejected %d malformed prediction(s) at the structured boundary: %s",
+                batch.rejection_count,
+                "; ".join(f"[{r.index}] {r.reason}" for r in batch.rejected),
+            )
 
-        if isinstance(data, dict):
-            data = data.get("predictions", [])
-        if not isinstance(data, list):
-            return []
-
-        return data
+        return batch
 
     def _validate_predictions(
         self,
-        raw: List[Dict[str, Any]],
+        batch: ParsedBatch,
         max_predictions: int,
     ) -> List[Prediction]:
-        """Validate and convert raw prediction dicts to Prediction objects."""
+        """Convert validated drafts into domain :class:`Prediction` objects.
+
+        The structured boundary has already enforced the schema, so each draft
+        is fed to ``_make_prediction`` (which still applies domain logic:
+        confidence clamping, category fallback, deadline parsing, source
+        normalisation).
+        """
         predictions: List[Prediction] = []
 
-        for item in raw[:max_predictions]:
+        for draft in batch.valid[:max_predictions]:
+            item = draft.model_dump()
             try:
                 pred = self._make_prediction(item)
                 if pred:

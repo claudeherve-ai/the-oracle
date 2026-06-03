@@ -190,6 +190,16 @@ from oracle.tools.nli import (
     LLMEntailmentJudge,
     quote_in_evidence,
 )
+from oracle.tools.structured import (
+    ParsedBatch,
+    PredictionBatch,
+    PredictionDraft,
+    Rejection,
+    extract_json_block,
+    parse_prediction_batch,
+    prediction_json_schema,
+    prediction_response_format,
+)
 
 __all__ = [
     "SearchResult",
@@ -204,4 +214,12 @@ __all__ = [
     "EntailmentJudgment",
     "LLMEntailmentJudge",
     "quote_in_evidence",
+    "ParsedBatch",
+    "PredictionBatch",
+    "PredictionDraft",
+    "Rejection",
+    "extract_json_block",
+    "parse_prediction_batch",
+    "prediction_json_schema",
+    "prediction_response_format",
 ]
