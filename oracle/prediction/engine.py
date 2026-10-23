@@ -26,6 +26,7 @@ from oracle.llm import LLMProvider, LLMResponse
 from oracle.calibration.tracker import ConfidenceContextualizer
 from oracle.models.prediction import (
     Category,
+    Citation,
     Prediction,
     Signal,
     Status,
@@ -44,8 +45,34 @@ _WEAK_VERDICTS = frozenset(
     {"contradicted", "insufficient_corroboration", "mixed_contradicting", "unverifiable"}
 )
 
-# ---------------------------------------------------------------------------
-# Core prediction engine
+
+def _citations_from_sources(sources: List[str]) -> List[Citation]:
+    seen: set = set()
+    out: List[Citation] = []
+    for s in sources or []:
+        url = str(s).strip()
+        if url and url not in seen:
+            seen.add(url)
+            out.append(Citation(url=url))
+    return out
+
+
+def _merge_citations(existing: List[Citation], evidence: List[Any]) -> List[Citation]:
+    """Upgrade citations with verified evidence (quote, stance, credibility)."""
+    by_url = {c.url: c for c in existing}
+    for ev in evidence:
+        url = (getattr(ev, "url", "") or "").strip()
+        if not url:
+            continue
+        by_url[url] = Citation(
+            url=url,
+            title=getattr(ev, "title", "") or "",
+            quote=getattr(ev, "quote", "") or "",
+            stance=getattr(ev, "stance", "neutral") or "neutral",
+            credibility=getattr(ev, "credibility", None),
+        )
+    return list(by_url.values())
+
 # ---------------------------------------------------------------------------
 
 
@@ -212,10 +239,10 @@ class PredictionEngine:
         # to record how much verification *moved* each number, including drops.
         confidence_pre = [p.confidence for p in predictions]
 
-        # Canonical verification path (A4): the multi-source, quote-verified NLI
-        # verifier is the ONE source of evidence-driven confidence adjustment.
-        # Gated behind verification_mode == "live" so default/test runs touch no
-        # network and behaviour is unchanged unless explicitly enabled.
+        # Every prediction carries structured citations, even before verification.
+        for p in predictions:
+            p.citations = _citations_from_sources(p.sources)
+
         verification_results: List["Optional[VerificationResult]"] = [None] * len(predictions)
         if predictions and self._verification_mode == "live":
             verifier = self._get_verifier()
@@ -223,11 +250,14 @@ class PredictionEngine:
             for idx, (p, r) in enumerate(zip(predictions, results)):
                 verification_results[idx] = r
                 p.confidence = max(0.01, min(0.99, r.adjusted_confidence))
+                p.verdict = getattr(r, "verdict", None)
+                lo, hi = getattr(r, "confidence_interval", (0.0, 0.0)) or (0.0, 0.0)
+                if hi > 0.0:
+                    p.confidence_interval_lower = max(0.0, min(lo, p.confidence))
+                    p.confidence_interval_upper = min(1.0, max(hi, p.confidence))
+                p.citations = _merge_citations(p.citations, getattr(r, "evidence", []) or [])
                 if r.summary:
                     p.reasoning = (p.reasoning or "") + f" [Verified: {r.summary}]"
-                # Abstain path (C10): when the evidence is too weak/conflicted to
-                # stand behind, refuse to forecast rather than emit a confident
-                # number. Opt-in so default behaviour is unchanged.
                 if self._abstain_on_weak_evidence and self._should_abstain(r):
                     p.status = Status.INSUFFICIENT_EVIDENCE
                     verdict = getattr(r, "verdict", "unverifiable")
@@ -236,6 +266,13 @@ class PredictionEngine:
                         f"verified_confidence={p.confidence:.2f} "
                         f"(threshold={self._abstain_threshold:.2f})]"
                     )
+
+        # A forecast with no citation at all cannot be audited: abstain.
+        if self._abstain_on_weak_evidence:
+            for p in predictions:
+                if not p.citations and p.status == Status.PENDING:
+                    p.status = Status.INSUFFICIENT_EVIDENCE
+                    p.reasoning = (p.reasoning or "") + " [Abstained: no citable sources]"
 
         # Per-prediction audit record (D14): emitted only when a sink is wired in,
         # so the default/test path is zero-overhead and behaviourally unchanged.

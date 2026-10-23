@@ -34,6 +34,17 @@ class Status(str, Enum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
+class Citation(BaseModel):
+    """A source backing a prediction, with the verbatim evidence when verified."""
+
+    url: str
+    title: str = ""
+    quote: str = ""  # exact verbatim span from the source (empty if unverified)
+    stance: str = "unverified"  # supports | contradicts | neutral | unverified
+    credibility: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class Prediction(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
@@ -43,6 +54,13 @@ class Prediction(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
     reasoning: str = ""
     sources: List[str] = Field(default_factory=list)
+    citations: List[Citation] = Field(
+        default_factory=list,
+        description="Structured citations (URL, verbatim quote, stance) backing this prediction",
+    )
+    verdict: Optional[str] = Field(
+        default=None, description="Verifier verdict: supported | contradicted | mixed | unverifiable"
+    )
     deadline: Optional[datetime] = None
     status: Status = Status.PENDING
     resolution: Optional[str] = None

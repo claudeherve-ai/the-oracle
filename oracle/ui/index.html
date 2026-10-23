@@ -320,6 +320,18 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgba(167,139,250,0.3); border-radius: 999px; }
   ::-webkit-scrollbar-thumb:hover { background: rgba(167,139,250,0.5); }
+.abstain { background: rgba(245,197,99,0.12); color: var(--yellow); padding: .5rem .75rem; border-radius: 8px; margin-bottom: .75rem; font-size: .85rem; }
+.trackrec { font-size: .8rem; color: var(--text-dim); margin: .5rem 0; }
+.cites { margin-top: .9rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: .7rem; font-size: .82rem; }
+.cite-title { font-weight: 600; margin-bottom: .4rem; color: var(--ink); }
+.cite { margin: .4rem 0; }
+.cite.none { color: var(--red); }
+.cite-n { color: var(--text-dim); margin-right: .3rem; }
+.cite a { color: var(--violet); text-decoration: none; }
+.cite a:hover { text-decoration: underline; color: var(--gold); }
+.cite-stance { margin-left: .5rem; font-weight: 600; }
+.cite-cred { margin-left: .5rem; color: var(--text-dim); }
+.cite blockquote { margin: .3rem 0 0 1.4rem; padding-left: .7rem; border-left: 2px solid rgba(255,255,255,0.15); color: var(--text-dim); font-style: italic; }
 </style>
 </head>
 <body>
@@ -407,6 +419,65 @@
 <script>
 const API = '/v1';
 
+// LLM/web content is untrusted: always escape, and only allow http(s) links.
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function safeUrl(u) { return /^https?:\/\//i.test(u || '') ? esc(u) : '#'; }
+
+const STANCE = {
+  supports: ['✓ Supports', 'var(--green)'],
+  contradicts: ['✗ Contradicts', 'var(--red)'],
+  neutral: ['• Neutral', 'var(--text-dim)'],
+  unverified: ['? Unverified', 'var(--yellow)'],
+};
+
+function renderCitations(p) {
+  const cites = p.citations && p.citations.length
+    ? p.citations
+    : (p.sources || []).map(url => ({ url, stance: 'unverified' }));
+  if (!cites.length) {
+    return '<div class="cites"><div class="cite-title">Citations</div><div class="cite none">No citations available — treat as unsupported.</div></div>';
+  }
+  return `<div class="cites"><div class="cite-title">Citations (${cites.length})</div>` + cites.map((c, n) => {
+    const [label, color] = STANCE[c.stance] || STANCE.unverified;
+    const name = esc(c.title || c.url.replace(/^https?:\/\//, '').slice(0, 70));
+    return `<div class="cite"><span class="cite-n">[${n + 1}]</span>
+      <a href="${safeUrl(c.url)}" target="_blank" rel="noopener noreferrer">${name}</a>
+      <span class="cite-stance" style="color:${color}">${label}</span>
+      ${c.credibility != null ? `<span class="cite-cred">credibility ${(c.credibility * 100).toFixed(0)}%</span>` : ''}
+      ${c.quote ? `<blockquote>“${esc(c.quote)}”</blockquote>` : ''}</div>`;
+  }).join('') + '</div>';
+}
+
+function renderCard(p, i) {
+  const conf = p.confidence * 100;
+  const abstained = p.status === 'insufficient_evidence';
+  const confClass = abstained ? 'conf-low' : conf >= 70 ? 'conf-high' : conf >= 50 ? 'conf-med' : 'conf-low';
+  const confColor = abstained ? 'var(--text-dim)' : conf >= 70 ? 'var(--green)' : conf >= 50 ? 'var(--yellow)' : 'var(--red)';
+  const confBg = 'rgba(255,255,255,0.06)';
+  const ci = (p.confidence_interval_lower != null && p.confidence_interval_upper != null)
+    ? ` (range ${(p.confidence_interval_lower * 100).toFixed(0)}–${(p.confidence_interval_upper * 100).toFixed(0)}%)` : '';
+  const tr = p.track_record;
+  const trText = tr && tr.total ? `Track record at this confidence: ${((tr.accuracy ?? 0) * 100).toFixed(0)}% correct across ${tr.total} resolved` : '';
+
+  return `<div class="prediction-card ${confClass}">
+    ${abstained ? '<div class="abstain">⚠ Abstained — evidence is insufficient or uncited. This is not a forecast.</div>' : ''}
+    <div class="statement"><strong>${i + 1}</strong>${esc(p.statement)}</div>
+    <div class="bar-container"><div class="bar-fill" style="width:${abstained ? 0 : conf}%;background:${confColor};color:${confColor}"></div></div>
+    <div class="meta">
+      <span class="confidence-badge" style="background:${confBg};color:${confColor}">${abstained ? 'No forecast' : conf.toFixed(0) + '% confidence' + ci}</span>
+      <span>${esc(p.category)}</span>
+      ${p.verdict ? `<span>Verdict: ${esc(p.verdict)}</span>` : ''}
+      ${p.deadline ? '<span>⏱ resolves by ' + esc(p.deadline.slice(0, 10)) + '</span>' : ''}
+      <span>ID ${esc(p.id.slice(0, 8))}</span>
+    </div>
+    ${trText ? `<div class="trackrec">${esc(trText)}</div>` : ''}
+    ${p.reasoning ? `<div class="reasoning">${esc(p.reasoning)}</div>` : ''}
+    ${renderCitations(p)}
+  </div>`;
+}
+
 function setPrompt(text) {
   document.getElementById('question').value = text;
   document.getElementById('question').focus();
@@ -435,32 +506,15 @@ async function ask() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: q, max_predictions: 5 })
     });
-    if (!r.ok) throw new Error((await r.json()).detail || 'API error');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(typeof err.detail === 'string' ? err.detail : 'API error ' + r.status);
+    }
     const data = await r.json();
     const preds = data.predictions || [];
 
     let html = '';
-    preds.forEach((p, i) => {
-      const conf = p.confidence * 100;
-      const confClass = conf >= 70 ? 'conf-high' : conf >= 50 ? 'conf-med' : 'conf-low';
-      const confColor = conf >= 70 ? 'var(--green)' : conf >= 50 ? 'var(--yellow)' : 'var(--red)';
-      const confBg = conf >= 70 ? 'rgba(52,211,153,0.14)' : conf >= 50 ? 'rgba(245,197,99,0.14)' : 'rgba(251,113,133,0.14)';
-      const sources = (p.sources || []).slice(0, 3);
-
-      html += `<div class="prediction-card ${confClass}">
-        <div class="statement"><strong>${i+1}</strong>${p.statement}</div>
-        <div class="bar-container"><div class="bar-fill" style="width:${conf}%;background:${confColor};color:${confColor}"></div></div>
-        <div class="meta">
-          <span class="confidence-badge" style="background:${confBg};color:${confColor}">${conf.toFixed(0)}% confidence</span>
-          <span>${p.category}</span>
-          ${p.deadline ? '<span>⏱ ' + p.deadline.slice(0,10) + '</span>' : ''}
-          <span>ID ${p.id.slice(0,8)}</span>
-        </div>
-        ${p.reasoning ? `<div class="reasoning">${p.reasoning.slice(0,400)}</div>` : ''}
-        ${sources.length ? `<div class="sources">Sources: ${sources.map(s => `<a href="${s}" target="_blank">${s.slice(0,50)}</a>`).join(' · ')}</div>` : ''}
-      </div>`;
-    });
-
+    preds.forEach((p, i) => { html += renderCard(p, i); });
     document.getElementById('predictions').innerHTML = html || '<div style="color:var(--text-dim);padding:2.5rem;text-align:center">No predictions generated. Try a more specific question.</div>';
     document.getElementById('question').value = '';
 
@@ -495,8 +549,8 @@ async function loadHistory() {
     (data.items||[]).forEach(p => {
       const sc = p.status === 'correct' ? 'var(--green)' : p.status === 'incorrect' ? 'var(--red)' : 'var(--yellow)';
       html += `<div class="history-item resolved-${p.status}">
-        <span>${p.statement.slice(0,120)}</span>
-        <span style="color:var(--text-dim);font-size:0.72rem;white-space:nowrap;font-family:var(--mono)">${p.category} · ${(p.confidence*100).toFixed(0)}% · <span style="color:${sc}">${p.status}</span></span>
+        <span>${esc(p.statement.slice(0,120))}</span>
+        <span style="color:var(--text-dim);font-size:0.72rem;white-space:nowrap;font-family:var(--mono)">${esc(p.category)} · ${(p.confidence*100).toFixed(0)}% · <span style="color:${sc}">${esc(p.status)}</span></span>
       </div>`;
     });
     document.getElementById('historyList').innerHTML = html || '<div style="color:var(--text-dim);padding:2.5rem;text-align:center">No predictions yet. <a href="#" onclick="switchTab(\'predict\')" style="color:var(--violet)">Make one →</a></div>';
