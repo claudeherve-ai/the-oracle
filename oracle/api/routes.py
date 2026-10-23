@@ -16,7 +16,7 @@ from oracle.calibration.tracker import CalibrationTracker
 from oracle.calibration.metrics import compute_full_report, serialize_full_report
 from oracle.ingestion.sources import ingest_all
 from oracle.signals.extractor import SignalExtractor
-from oracle.api.dependencies import get_llm, get_prediction_repo, get_signal_repo
+from oracle.api.dependencies import build_engine, get_llm, get_prediction_repo, get_signal_repo
 
 logger = logging.getLogger("oracle.api")
 router = APIRouter(prefix="/v1")
@@ -32,8 +32,7 @@ async def predict(
     signal_repo: SignalRepository = Depends(get_signal_repo),
 ):
     """Generate predictions from a question + current signals."""
-    llm = get_llm()
-    engine = PredictionEngine(llm)
+    engine = build_engine()
     signals = await signal_repo.list_recent(limit=50)
 
     if body.question:
@@ -60,8 +59,7 @@ async def predict_query(
     signal_repo: SignalRepository = Depends(get_signal_repo),
 ):
     """Generate predictions for a specific question."""
-    llm = get_llm()
-    engine = PredictionEngine(llm)
+    engine = build_engine()
     signals = await signal_repo.list_recent(limit=50)
     predictions = await engine.generate_from_question(
         body.question, signals, max_predictions=body.max_predictions

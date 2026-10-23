@@ -15,6 +15,8 @@ class PredictionRepository:
         record = PredictionRecord(
             id=p.id, category=p.category.value, statement=p.statement,
             confidence=p.confidence, reasoning=p.reasoning, sources=p.sources,
+            citations=[c.model_dump(mode="json") for c in p.citations],
+            verdict=p.verdict,
             deadline=p.deadline, status=p.status.value,
             resolution=p.resolution, resolved_at=p.resolved_at,
             created_at=p.created_at,
@@ -61,7 +63,8 @@ class PredictionRepository:
         return Prediction(
             id=r.id, category=r.category, statement=r.statement,
             confidence=r.confidence, reasoning=r.reasoning or "",
-            sources=r.sources or [], deadline=r.deadline, status=r.status,
+            sources=r.sources or [], citations=r.citations or [], verdict=r.verdict,
+            deadline=r.deadline, status=r.status,
             resolution=r.resolution, resolved_at=r.resolved_at,
             created_at=r.created_at,
         )

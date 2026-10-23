@@ -12,8 +12,9 @@ cd ~/the-oracle
 python3 -m venv venv && source venv/bin/activate
 pip install -e ".[dev]" --break-system-packages
 
-# Set your LLM key
-export OPENAI_API_KEY="sk-..."
+# Configure Azure AI Foundry (Entra ID auth — run `az login`; no API key needed)
+export AZURE_OPENAI_ENDPOINT="https://<resource>.services.ai.azure.com/openai/v1"
+export AZURE_OPENAI_DEPLOYMENT="gpt-5.6-terra"
 
 # Start the server
 oracle server &
@@ -69,6 +70,13 @@ Matrix-themed (green on black) real-time dashboard at `/dashboard/index.html`:
 - Breakdown by category
 - Recent predictions feed
 
+## Reliability & citations
+
+- Every prediction returns structured `citations` (URL, verbatim quote, stance, credibility) and a verifier `verdict`.
+- Live multi-source verification and abstention are **on by default** (`ORACLE_VERIFICATION`, `ORACLE_ABSTAIN`). Weak, contradicted, or uncited forecasts are returned as `insufficient_evidence` instead of a confident number.
+- Confidence is shown with its historical track record. Accuracy near 100% is not achievable for forecasting; the goal is calibration plus honest abstention.
+- A missing LLM configuration returns a clear 503; the app never silently falls back to a mock model (`ORACLE_LLM=mock` for demos only).
+
 ## Architecture
 
 ```
@@ -82,7 +90,8 @@ Ingestion → Signal Extraction → Prediction Engine → Calibration Tracker
 az acr build --registry acroracle --image oracle:v1 .
 az containerapp update --name the-oracle -g rg-oracle-prod \
   --image acroracle.azurecr.io/oracle:v1 \
-  --env-vars OPENAI_API_KEY=... ORACLE_DB=postgresql://... \
+  --env-vars AZURE_OPENAI_ENDPOINT=https://<resource>.services.ai.azure.com/openai/v1 AZURE_OPENAI_DEPLOYMENT=gpt-5.6-terra ORACLE_DB=postgresql://... \
+  # use a managed identity with the "Cognitive Services OpenAI User" role
   --ingress external --target-port 8001
 ```
 

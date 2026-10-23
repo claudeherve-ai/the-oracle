@@ -38,13 +38,43 @@ class WebContext:
 
 
 async def web_search(query: str, max_results: int = 5) -> List[SearchResult]:
-    """Search the web using DuckDuckGo (free, no API key).
+    """Search the web: Foundry's built-in search first, DuckDuckGo as fallback."""
+    foundry = await _foundry_search(query, max_results)
+    if foundry:
+        return foundry
+    return await _ddg_search(query, max_results)
 
-    Returns grounded, real-time results to feed into LLM prompts.
-    """
+
+_search_provider = None
+
+
+async def _foundry_search(query: str, max_results: int) -> List[SearchResult]:
+    import os
+
+    global _search_provider
+    if not os.getenv("AZURE_OPENAI_ENDPOINT") or os.getenv("ORACLE_LLM", "").lower() == "mock":
+        return []
+    try:
+        if _search_provider is None:
+            from oracle.llm import OpenAIProvider
+
+            _search_provider = OpenAIProvider()
+        _, cites = await _search_provider.search(query, max_results)
+        logger.info("Foundry web search '%s': %d sources", query[:50], len(cites))
+        return [
+            SearchResult(title=c["title"], url=c["url"], snippet=c["snippet"], source="foundry-web")
+            for c in cites
+        ]
+    except Exception as e:
+        logger.warning("Foundry web search failed for '%s': %s", query[:50], e)
+        return []
+
+
+async def _ddg_search(query: str, max_results: int = 5) -> List[SearchResult]:
+    """Search the web using DuckDuckGo (free, no API key; best-effort fallback)."""
     results = []
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
             url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:120.0) Gecko/20100101 Firefox/120.0"
@@ -158,15 +188,18 @@ async def multi_source_grounding(query: str) -> str:
     """
     parts = []
 
-    # 1. Try MCP grounding (authoritative sources)
-    try:
-        from oracle.tools.mcp_client import mcp_grounding
-        mcp_text = await mcp_grounding(query)
-        if mcp_text and "## Authoritative Grounding" in mcp_text:
-            parts.append(mcp_text)
-            logger.info("MCP grounding successful for: %s", query[:80])
-    except Exception as e:
-        logger.debug("MCP grounding unavailable: %s", e)
+    # 1. MCP doc servers are opt-in: they index software docs, not forecasting
+    # evidence, and the current client does not speak the full MCP protocol.
+    import os
+
+    if os.getenv("ORACLE_MCP", "off").lower() == "on":
+        try:
+            from oracle.tools.mcp_client import mcp_grounding
+            mcp_text = await mcp_grounding(query)
+            if mcp_text and "## Authoritative Grounding" in mcp_text:
+                parts.append(mcp_text)
+        except Exception as e:
+            logger.debug("MCP grounding unavailable: %s", e)
 
     # 2. Web research (always runs as supplement)
     try:

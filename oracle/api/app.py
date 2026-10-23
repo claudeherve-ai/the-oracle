@@ -3,10 +3,10 @@
 import os
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
 
 from oracle.api.routes import router
@@ -19,7 +19,7 @@ logger = logging.getLogger("oracle")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("The Oracle starting...")
-    logger.info("  LLM: %s", "Azure Foundry (gpt-5.4)" if os.getenv("AZURE_OPENAI_API_KEY") else "not configured")
+    logger.info("  LLM: %s", os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.6-terra") if os.getenv("AZURE_OPENAI_ENDPOINT") else "NOT CONFIGURED (set AZURE_OPENAI_ENDPOINT)")
     logger.info("  DB: %s", os.getenv("ORACLE_DB", "sqlite:///oracle.db"))
     yield
     logger.info("The Oracle shutting down.")
@@ -34,11 +34,18 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:8001,http://127.0.0.1:8001").split(",")],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RuntimeError)
+async def runtime_error_handler(request: Request, exc: RuntimeError):
+    """Surface LLM/config failures as a clear 503 instead of an opaque 500."""
+    logger.error("Request failed: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 # Mount dashboard static files
 dashboard_path = os.path.join(os.path.dirname(__file__), "..", "dashboard")

@@ -1,7 +1,7 @@
 """LLM provider protocol — testable abstraction for all LLM calls.
 
 All modules in The Oracle accept an LLMProvider for generation.
-Uses Azure Foundry (Azure OpenAI) with gpt-5.4 by default.
+Uses Azure AI Foundry (Responses API) with gpt-5.6-terra by default.
 """
 
 from __future__ import annotations
@@ -37,26 +37,84 @@ class LLMProvider(Protocol):
     def model_name(self) -> str: ...
 
 
+DEFAULT_MODEL = "gpt-5.6-terra"
+ENTRA_SCOPE = "https://ai.azure.com/.default"
+
+
+def normalize_endpoint(endpoint: str) -> str:
+    """Return the Foundry OpenAI v1 base URL for any commonly pasted form.
+
+    Accepts the resource root, the ``/openai/v1`` base, or a full
+    ``/openai/v1/responses`` URL.
+    """
+    url = endpoint.strip().rstrip("/")
+    for suffix in ("/responses", "/chat/completions"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+    if not url.endswith("/openai/v1"):
+        url = url.removesuffix("/openai") + "/openai/v1"
+    return url
+
+
 class OpenAIProvider:
-    """Azure Foundry (Azure OpenAI) LLM provider with gpt-5.4."""
+    """Azure AI Foundry provider (Responses API, ``gpt-5.6-terra`` by default).
+
+    Authenticates with Microsoft Entra ID (``DefaultAzureCredential``) unless an
+    explicit ``api_key`` / ``AZURE_OPENAI_API_KEY`` is supplied. Reasoning
+    models reject sampling parameters, so ``temperature`` is accepted for
+    interface compatibility but is not sent.
+    """
 
     def __init__(
         self,
-        model: str = "gpt-5.4",
+        model: str = DEFAULT_MODEL,
         api_key: str | None = None,
         azure_endpoint: str | None = None,
-        api_version: str = "2024-12-01-preview",
+        timeout: float | None = None,
+        max_retries: int = 3,
+        **_legacy: Any,
     ):
         import os
         self._model = os.getenv("AZURE_OPENAI_DEPLOYMENT", model)
         self._api_key = api_key
         self._azure_endpoint = azure_endpoint
-        self._api_version = api_version
+        self._timeout = timeout or float(os.getenv("ORACLE_LLM_TIMEOUT", "120"))
+        self._max_retries = max_retries
         self._client = None
+        self._credential = None
 
     @property
     def model_name(self) -> str:
         return self._model
+
+    def _get_client(self):
+        if self._client is not None:
+            return self._client
+        import os
+        from openai import AsyncOpenAI
+
+        endpoint = self._azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
+        if not endpoint:
+            raise RuntimeError(
+                "AZURE_OPENAI_ENDPOINT is not configured. Set it to your Foundry "
+                "endpoint (https://<resource>.services.ai.azure.com/openai/v1). "
+                "No default is provided so the engine never calls an unexpected resource."
+            )
+        key = self._api_key or os.getenv("AZURE_OPENAI_API_KEY")
+        if key:
+            credential: Any = key
+        else:
+            from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
+
+            self._credential = DefaultAzureCredential()
+            credential = get_bearer_token_provider(self._credential, ENTRA_SCOPE)
+        self._client = AsyncOpenAI(
+            base_url=normalize_endpoint(endpoint),
+            api_key=credential,
+            timeout=self._timeout,
+            max_retries=self._max_retries,
+        )
+        return self._client
 
     async def complete(
         self,
@@ -67,57 +125,79 @@ class OpenAIProvider:
         max_tokens: int = 2000,
         **kwargs: Any,
     ) -> LLMResponse:
-        if self._client is None:
-            import os
-            from openai import AsyncAzureOpenAI
-
-            endpoint = self._azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
-            if not endpoint:
-                raise RuntimeError(
-                    "AZURE_OPENAI_ENDPOINT is not configured. Set the "
-                    "AZURE_OPENAI_ENDPOINT environment variable or pass "
-                    "azure_endpoint=... to OpenAIProvider(). No default endpoint "
-                    "is provided so the engine fails loudly rather than calling "
-                    "an unexpected resource."
-                )
-            self._client = AsyncAzureOpenAI(
-                api_key=self._api_key or os.getenv("AZURE_OPENAI_API_KEY"),
-                azure_endpoint=endpoint,
-                api_version=self._api_version or os.getenv(
-                    "AZURE_OPENAI_API_VERSION", "2024-12-01-preview"
-                ),
+        client = self._get_client()
+        try:
+            response = await client.responses.create(
+                model=self._model,
+                instructions=system_prompt,
+                input=user_prompt,
+                max_output_tokens=max_tokens,
+                **kwargs,
             )
+        except Exception as exc:
+            raise RuntimeError(
+                f"LLM call to deployment '{self._model}' failed: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            temperature=temperature,
-            max_completion_tokens=max_tokens,
-            **kwargs,
-        )
-
-        choice = response.choices[0]
-        content = choice.message.content or ""
-
-        usage_dict = {}
+        usage_dict: Dict[str, int] = {}
         if response.usage:
             usage_dict = {
-                "prompt_tokens": response.usage.prompt_tokens or 0,
-                "completion_tokens": response.usage.completion_tokens or 0,
+                "prompt_tokens": response.usage.input_tokens or 0,
+                "completion_tokens": response.usage.output_tokens or 0,
                 "total_tokens": response.usage.total_tokens or 0,
             }
-
         return LLMResponse(
-            content=content,
+            content=response.output_text or "",
             model=response.model or self._model,
             usage=usage_dict,
         )
 
+    async def search(self, query: str, max_results: int = 5) -> tuple[str, List[Dict[str, str]]]:
+        """Search the live web through Foundry's built-in web_search tool.
+
+        Returns the model's grounded summary plus the URL citations it
+        produced (``url``, ``title``, ``snippet`` taken from the summary).
+        """
+        client = self._get_client()
+        try:
+            response = await client.responses.create(
+                model=self._model,
+                instructions=(
+                    "You are a research assistant. Search the web and report current "
+                    "facts relevant to the query, with exact figures and dates. "
+                    "Do not speculate; say so if sources disagree or are missing."
+                ),
+                input=query,
+                tools=[{"type": "web_search"}],
+                max_output_tokens=2500,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"web search failed: {type(exc).__name__}: {exc}") from exc
+
+        text = response.output_text or ""
+        found: Dict[str, Dict[str, str]] = {}
+        for item in response.output:
+            if getattr(item, "type", "") != "message":
+                continue
+            for part in item.content:
+                for ann in getattr(part, "annotations", None) or []:
+                    if getattr(ann, "type", "") != "url_citation" or ann.url in found:
+                        continue
+                    start = max(0, (getattr(ann, "start_index", 0) or 0) - 280)
+                    end = getattr(ann, "start_index", None) or len(text)
+                    found[ann.url] = {
+                        "url": ann.url,
+                        "title": getattr(ann, "title", "") or ann.url,
+                        "snippet": text[start:end].strip(),
+                    }
+        return text, list(found.values())[:max_results]
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+        if self._credential is not None:
+            await self._credential.close()
 
 class MockProvider:
     """Mock LLM provider for testing."""

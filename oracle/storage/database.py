@@ -23,6 +23,8 @@ class PredictionRecord(Base):
     confidence = Column(Float, nullable=False)
     reasoning = Column(Text, default="")
     sources = Column(JSON, default=[])
+    citations = Column(JSON, default=[])
+    verdict = Column(String, nullable=True)
     deadline = Column(DateTime, nullable=True)
     status = Column(String, default="pending")
     resolution = Column(Text, nullable=True)
@@ -42,8 +44,21 @@ class SignalRecord(Base):
     captured_at = Column(DateTime)
 
 
+def _add_missing_columns() -> None:
+    """Lightweight forward migration for databases created before citations."""
+    from sqlalchemy import inspect, text
+
+    existing = {c["name"] for c in inspect(engine).get_columns("predictions")}
+    wanted = {"citations": "JSON", "verdict": "VARCHAR"}
+    with engine.begin() as conn:
+        for name, ddl in wanted.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE predictions ADD COLUMN {name} {ddl}"))
+
+
 def init_db():
     Base.metadata.create_all(engine)
+    _add_missing_columns()
 
 
 def get_session() -> Session:
