@@ -41,9 +41,10 @@ logger = logging.getLogger("oracle.prediction.engine")
 #: conflicted to stand behind a forecast. When the abstain policy is enabled,
 #: any prediction landing on one of these verdicts is converted into an explicit
 #: ``INSUFFICIENT_EVIDENCE`` abstention rather than presented as a confident call.
-_WEAK_VERDICTS = frozenset(
-    {"contradicted", "insufficient_corroboration", "mixed_contradicting", "unverifiable"}
-)
+#: Verifier verdicts that signal conflicting evidence. "unverifiable" is NOT
+#: weak for a forecast: a future outcome can never be entailed by today's
+#: sources, so abstention there is decided by citations and confidence instead.
+_WEAK_VERDICTS = frozenset({"contradicted", "mixed_contradicting"})
 
 
 def _citations_from_sources(sources: List[str]) -> List[Citation]:
@@ -187,10 +188,6 @@ class PredictionEngine:
         if question:
             # Use multi-source grounding (MCP servers + web search)
             web_grounding = await multi_source_grounding(question)
-            if not web_grounding:
-                # Fallback to basic web research
-                web_context = await research_topic(question)
-                web_grounding = format_context_for_prompt(web_context)
             if web_grounding:
                 logger.info("Predictions grounded with multi-source data for: %s",
                            question[:80])
@@ -676,9 +673,13 @@ def _build_user_prompt(
     extra_context: Optional[str] = None,
 ) -> str:
     """Build the user prompt with signal data and the question."""
-    lines = []
-
-    # Header
+    lines = [
+        f"Today's date is {datetime.now(timezone.utc).strftime('%Y-%m-%d')} (UTC). "
+        "Use ONLY the context below for current facts (prices, dates, announcements); "
+        "never rely on memory for them. In \"sources\" list only URLs that appear in the "
+        "context. Anchor confidence on the current state, the time remaining, and "
+        "base rates, and widen uncertainty for volatile or long-horizon questions.\n"
+    ]
     if question:
         lines.append(f"# QUESTION\n{question}\n")
         lines.append(f"Generate at most {max_predictions} predictions that answer this question.\n")

@@ -153,6 +153,46 @@ class OpenAIProvider:
             usage=usage_dict,
         )
 
+    async def search(self, query: str, max_results: int = 5) -> tuple[str, List[Dict[str, str]]]:
+        """Search the live web through Foundry's built-in web_search tool.
+
+        Returns the model's grounded summary plus the URL citations it
+        produced (``url``, ``title``, ``snippet`` taken from the summary).
+        """
+        client = self._get_client()
+        try:
+            response = await client.responses.create(
+                model=self._model,
+                instructions=(
+                    "You are a research assistant. Search the web and report current "
+                    "facts relevant to the query, with exact figures and dates. "
+                    "Do not speculate; say so if sources disagree or are missing."
+                ),
+                input=query,
+                tools=[{"type": "web_search"}],
+                max_output_tokens=2500,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"web search failed: {type(exc).__name__}: {exc}") from exc
+
+        text = response.output_text or ""
+        found: Dict[str, Dict[str, str]] = {}
+        for item in response.output:
+            if getattr(item, "type", "") != "message":
+                continue
+            for part in item.content:
+                for ann in getattr(part, "annotations", None) or []:
+                    if getattr(ann, "type", "") != "url_citation" or ann.url in found:
+                        continue
+                    start = max(0, (getattr(ann, "start_index", 0) or 0) - 280)
+                    end = getattr(ann, "start_index", None) or len(text)
+                    found[ann.url] = {
+                        "url": ann.url,
+                        "title": getattr(ann, "title", "") or ann.url,
+                        "snippet": text[start:end].strip(),
+                    }
+        return text, list(found.values())[:max_results]
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.close()
